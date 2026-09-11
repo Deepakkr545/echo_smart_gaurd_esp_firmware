@@ -1827,6 +1827,9 @@ static void handleStatus() {
   json += "\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) + "\",";
   json += "\"armed\":" + String(*gArmed ? "true":"false") + ",";
   json += "\"alarmEnabled\":" + String(gSettings->alarmEnabled ? "true":"false") + ","; // Telegram mute state — despite the field's historical name, this ONLY gates Telegram alerts, not the buzzer
+  json += "\"displaySkin\":" + String(gSettings->displaySkin) + ",";
+  json += "\"displaySkinName\":\"" + String(Display::getSkinName(gSettings->displaySkin)) + "\",";
+  json += "\"displaySkinCount\":" + String(DISPLAY_SKIN_COUNT) + ",";
   json += "\"armedByNightMode\":" + String(*gArmedByNightMode ? "true":"false") + ",";
   json += "\"alarmActive\":" + String(Alarm::isActive() ? "true":"false") + ",";
   json += "\"distanceValid\":" + String(distanceValid ? "true":"false") + ",";
@@ -1974,6 +1977,39 @@ static void handleSetTrigger() { if (!checkAuth()) return;
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
   Notify::sendTextMessage("🎯 Trigger Distance Updated\n\nNew value: " + String(val,1) + " cm");
+}
+
+// POST /setskin — changes which OLED reading-screen layout is drawn.
+// Purely cosmetic (never touches sensing/alarm logic) — applied
+// immediately via Display::setSkin() so the very next loop() redraw
+// already shows the new skin, with no restart needed.
+// GET /skins — lists every available OLED skin (index + name) as JSON.
+// Separate from /status (which only reports the CURRENTLY selected
+// skin) — this is what the app's skin-picker screen calls to build its
+// list, so adding/renaming skins in a future firmware update doesn't
+// require an app update to match.
+static void handleSkins() {
+  httpServer.sendHeader("Access-Control-Allow-Origin", "*");
+  if (!checkAuth()) return;
+  String json = "{\"skins\":[";
+  for (int i = 0; i < DISPLAY_SKIN_COUNT; i++) {
+    if (i > 0) json += ",";
+    json += "{\"index\":" + String(i) + ",\"name\":\"" + String(Display::getSkinName(i)) + "\"}";
+  }
+  json += "],\"current\":" + String(gSettings->displaySkin) + "}";
+  httpServer.send(200, "application/json", json);
+}
+
+static void handleSetSkin() { if (!checkAuth()) return;
+  if (!httpServer.hasArg("value")) { httpServer.send(400,"text/plain","Missing value"); return; }
+  int val = httpServer.arg("value").toInt();
+  if (val < 0 || val >= DISPLAY_SKIN_COUNT) {
+    httpServer.send(400,"text/plain","Out of range"); return;
+  }
+  gSettings->displaySkin = (uint8_t)val;
+  Storage::save(*gSettings);
+  Display::setSkin(gSettings->displaySkin);
+  httpServer.send(200,"text/plain","OK");
 }
 
 static void handleSetDeviceInfo() { if (!checkAuth()) return;
@@ -2258,6 +2294,8 @@ void begin(Settings *settingsPtr, bool *armedPtr, bool *armedByNightModePtr, flo
   httpServer.on("/settelegram", HTTP_POST, handleSetTelegram);
   httpServer.on("/removetelegram", HTTP_POST, handleRemoveTelegram);
   httpServer.on("/settrigger", HTTP_POST, handleSetTrigger);
+  httpServer.on("/setskin", HTTP_POST, handleSetSkin);
+  httpServer.on("/skins", HTTP_GET, handleSkins);
   httpServer.on("/buzzer/on", HTTP_POST, handleBuzzerOn);
   httpServer.on("/buzzer/off", HTTP_POST, handleBuzzerOff);
   httpServer.on("/setbuzzertimes", HTTP_POST, handleSetBuzzerTimes);

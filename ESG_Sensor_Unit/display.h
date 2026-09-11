@@ -9,9 +9,11 @@
   nothing else in the project needs to know.
 
   SCOPE:
-  Only boot screen + a generic "status line" function for testing.
-  Main screen (distance, WiFi status, etc.) comes in a later step once
-  we have real sensor/WiFi data to show.
+  Boot/setup/status screens, plus the main live-reading screen — drawn
+  in one of DISPLAY_SKIN_COUNT selectable visual styles (see setSkin()
+  below). Adding a new skin means adding one more skinDraw* function in
+  display.cpp and one line in showReadingScreen()'s dispatch switch —
+  nothing else in the project needs to change.
   =====================================================================
 */
 
@@ -55,9 +57,34 @@ namespace Display {
   // Main "live reading" screen shown every loop — distance, armed
   // state, alarm state, WiFi status, buzzer connectivity, and trigger
   // distance with an "IN TRIGGER ZONE" indicator. Fast/non-blocking.
+  // Which of the available SKINS actually gets drawn is controlled by
+  // setSkin() below — the caller (main.ino) never needs to know which
+  // one is active.
   void showReadingScreen(bool armed, bool alarmActive, float distanceCm,
                          bool distanceValid, bool wifiConnected, bool buzzerReachable,
                          const String &deviceName, float triggerDistanceCm);
+
+  // ---------------------------------------------------------------------
+  // Reading-screen skins — purely cosmetic alternate layouts for
+  // showReadingScreen() above. Selected from the dashboard (or the app),
+  // persisted in Settings::displaySkin, and applied immediately without
+  // needing a restart. See display.cpp for what each one actually looks
+  // like — the names below are also shown, verbatim, in the dashboard's
+  // skin picker dropdown.
+  // ---------------------------------------------------------------------
+  #define DISPLAY_SKIN_COUNT 30
+
+  // Sets which skin showReadingScreen() draws. Out-of-range values clamp
+  // to skin 0 (Classic) rather than doing anything undefined.
+  void setSkin(uint8_t skin);
+
+  // Currently active skin index (0..DISPLAY_SKIN_COUNT-1).
+  uint8_t getSkin();
+
+  // Short human-readable name for a skin index, e.g. "Bar Gauge" — used
+  // to label the dashboard's picker and to report the current skin's
+  // name in /status. Returns "Classic Numeric" for any out-of-range index.
+  const char* getSkinName(uint8_t skin);
 
   // Simple one-line message screen, used for testing/debugging this
   // module before the real "main screen" layout exists.

@@ -171,6 +171,7 @@ void setup() {
   bool displayOk = Display::begin();
   displayAvailable = displayOk;
   if (displayOk) {
+    Display::setSkin(settings.displaySkin); // Apply the saved reading-screen skin before anything gets drawn
     Display::showBootScreen(settings.deviceName, settings.deviceId);
     Display::showMessage("System Ready", "Loading settings...");
   } else {

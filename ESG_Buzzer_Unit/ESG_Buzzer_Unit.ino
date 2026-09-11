@@ -28,6 +28,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <math.h> // sin/cos/fmod — used by the Radar Sweep, Sonar Pulse, and Analog Gauge skins
 #include <EEPROM.h>
 #include <time.h>
 
@@ -35,7 +36,7 @@
 // Persisted config
 // ---------------------------------------------------------------------
 #define BUZZ_EEPROM_SIZE 700
-#define BUZZ_MAGIC "BZ04"
+#define BUZZ_MAGIC "BZ05"
 #define MAX_MANUAL_SENSORS 5
 #define BUZZ_NTP_GMT_OFFSET_SEC 19800 // IST +5:30, same as main sensor ESP
 
@@ -68,14 +69,46 @@ struct BuzzerConfig {
   uint8_t historyCount;
   uint32_t wifiReconnectLog[5]; // WiFi connect/reconnect event timestamps
   uint8_t wifiReconnectCount;
+  uint8_t displaySkin;       // Idle-screen skin (added BZ05) — see DISPLAY_SKIN_COUNT/skin drawing functions below
   uint16_t checksum;
 };
 BuzzerConfig cfg;
+
+// BuzzerConfig exactly as it existed at BZ04 (before displaySkin) — kept
+// so loadConfig() can migrate an existing device's WiFi/name/manual-
+// sensor settings forward instead of wiping them just because one new
+// cosmetic field was added. Same technique the Sensor Unit's
+// storage.cpp uses for its own version history.
+struct BuzzerConfigV4 {
+  char magic[4];
+  char name[24];
+  char id[24];
+  char wifiSSID[32];
+  char wifiPassword[64];
+  char dashUsername[20];
+  char dashPassword[24];
+  ManualSensorEntry manualSensors[MAX_MANUAL_SENSORS];
+  bool buzzerPaused;
+  uint32_t sessionStartEpoch;
+  uint32_t lastAliveEpoch;
+  uint32_t historyStart[5];
+  uint32_t historyEnd[5];
+  uint8_t historyCount;
+  uint32_t wifiReconnectLog[5];
+  uint8_t wifiReconnectCount;
+  uint16_t checksum;
+};
 
 static uint16_t computeConfigChecksum(const BuzzerConfig &c) {
   const uint8_t *b = (const uint8_t*)&c;
   uint16_t sum = 0;
   for (size_t i = 0; i < offsetof(BuzzerConfig, checksum); i++) sum += b[i];
+  return sum;
+}
+static uint16_t computeConfigChecksumV4(const BuzzerConfigV4 &c) {
+  const uint8_t *b = (const uint8_t*)&c;
+  uint16_t sum = 0;
+  for (size_t i = 0; i < offsetof(BuzzerConfigV4, checksum); i++) sum += b[i];
   return sum;
 }
 void saveConfig() {
@@ -87,15 +120,48 @@ void saveConfig() {
 void loadConfig() {
   EEPROM.begin(BUZZ_EEPROM_SIZE);
   EEPROM.get(0, cfg);
-  if (memcmp(cfg.magic, BUZZ_MAGIC, 4) != 0 || cfg.checksum != computeConfigChecksum(cfg)) {
-    memset(&cfg, 0, sizeof(cfg));
-    strncpy(cfg.name, "Unnamed Buzzer", sizeof(cfg.name) - 1);
-    strncpy(cfg.id, "Buzzer Unit", sizeof(cfg.id) - 1);
-    saveConfig();
-    Serial.println("[CONFIG] No valid config found — using defaults.");
-  } else {
-    Serial.println("[CONFIG] Loaded config from EEPROM.");
+  if (memcmp(cfg.magic, BUZZ_MAGIC, 4) == 0 && cfg.checksum == computeConfigChecksum(cfg)) {
+    Serial.println("[CONFIG] Loaded config from EEPROM (BZ05).");
+    return;
   }
+
+  // Current-version load failed — check whether this is actually a
+  // BZ04 device (the version right before displaySkin was added)
+  // before assuming the EEPROM is genuinely blank/corrupted.
+  BuzzerConfigV4 old;
+  EEPROM.get(0, old);
+  if (memcmp(old.magic, "BZ04", 4) == 0 && old.checksum == computeConfigChecksumV4(old)) {
+    Serial.println("[CONFIG] Migrating BZ04 -> BZ05 (all settings preserved, displaySkin defaults to Classic).");
+    memset(&cfg, 0, sizeof(cfg));
+    memcpy(cfg.name, old.name, sizeof(cfg.name));
+    memcpy(cfg.id, old.id, sizeof(cfg.id));
+    memcpy(cfg.wifiSSID, old.wifiSSID, sizeof(cfg.wifiSSID));
+    memcpy(cfg.wifiPassword, old.wifiPassword, sizeof(cfg.wifiPassword));
+    memcpy(cfg.dashUsername, old.dashUsername, sizeof(cfg.dashUsername));
+    memcpy(cfg.dashPassword, old.dashPassword, sizeof(cfg.dashPassword));
+    memcpy(cfg.manualSensors, old.manualSensors, sizeof(cfg.manualSensors));
+    cfg.buzzerPaused = old.buzzerPaused;
+    cfg.sessionStartEpoch = old.sessionStartEpoch;
+    cfg.lastAliveEpoch = old.lastAliveEpoch;
+    memcpy(cfg.historyStart, old.historyStart, sizeof(cfg.historyStart));
+    memcpy(cfg.historyEnd, old.historyEnd, sizeof(cfg.historyEnd));
+    cfg.historyCount = old.historyCount;
+    memcpy(cfg.wifiReconnectLog, old.wifiReconnectLog, sizeof(cfg.wifiReconnectLog));
+    cfg.wifiReconnectCount = old.wifiReconnectCount;
+    cfg.displaySkin = 0; // Classic — the only genuinely new field
+    saveConfig();
+    return;
+  }
+
+  // Neither the current nor the previous version's checksum matched —
+  // truly blank/foreign flash, or corrupted beyond recovery. Fall back
+  // to factory defaults, same as before.
+  memset(&cfg, 0, sizeof(cfg));
+  strncpy(cfg.name, "Unnamed Buzzer", sizeof(cfg.name) - 1);
+  strncpy(cfg.id, "Buzzer Unit", sizeof(cfg.id) - 1);
+  cfg.displaySkin = 0;
+  saveConfig();
+  Serial.println("[CONFIG] No valid config found — using defaults.");
 }
 
 // ---------------------------------------------------------------------
@@ -337,9 +403,77 @@ static void formatUptime(unsigned long ms, char *buf, size_t bufSize) {
   snprintf(buf, bufSize, "%lud", d);
 }
 
-void drawIdleScreen(unsigned long now) {
-  oled.clearDisplay();
+// ---------------------------------------------------------------------
+// Idle-screen skins — parallel to the Sensor Unit's own reading-screen
+// skins (same 10-name set, same visual language), applied here to
+// whatever the Buzzer Unit's idle screen actually has to show: uptime,
+// WiFi, connected-sensor count/names, and listening/silenced state.
+// Selected the same way — persisted in cfg.displaySkin, changed via
+// /setskin, applied immediately with no restart.
+// ---------------------------------------------------------------------
+#define DISPLAY_SKIN_COUNT 30
 
+static const char* SKIN_NAMES[DISPLAY_SKIN_COUNT] = {
+  "Classic Numeric",
+  "Bar Gauge",
+  "Radar Sweep",
+  "Minimal Shield",
+  "Security HUD",
+  "Sonar Pulse",
+  "Retro Terminal",
+  "Grid Dashboard",
+  "Analog Gauge",
+  "Big Digit",
+  "Heartbeat Monitor",
+  "Tachometer",
+  "Thermometer",
+  "Equalizer Bars",
+  "VU Meter",
+  "Digital Matrix",
+  "CRT Scanlines",
+  "Orbit Monitor",
+  "Ripple Wave",
+  "Compass Dial",
+  "Pixel Guard",
+  "Matrix Rain",
+  "Fingerprint Scan",
+  "Combination Lock",
+  "Flame Alert",
+  "Frost Idle",
+  "Lightning Pulse",
+  "Star Field",
+  "Hourglass Timer",
+  "Constellation",
+};
+
+const char* getSkinName(uint8_t skin) {
+  if (skin >= DISPLAY_SKIN_COUNT) return SKIN_NAMES[0];
+  return SKIN_NAMES[skin];
+}
+
+// Cached WiFi signal bar count (0-4), refreshed at most every 5s —
+// shared by every skin that wants to show signal strength, so none of
+// them need their own separate RSSI-polling timer.
+static int getSignalBars(bool wifiOk) {
+  static int cachedBars = 0;
+  static unsigned long lastRssiCheckMillis = 0;
+  unsigned long now = millis();
+  if (now - lastRssiCheckMillis >= 5000 || lastRssiCheckMillis == 0) {
+    lastRssiCheckMillis = now;
+    int rssi = wifiOk ? WiFi.RSSI() : -100;
+    if (rssi > -55) cachedBars = 4;
+    else if (rssi > -65) cachedBars = 3;
+    else if (rssi > -75) cachedBars = 2;
+    else if (rssi > -85) cachedBars = 1;
+    else cachedBars = 0;
+  }
+  return cachedBars;
+}
+
+// Skin 0 — Classic Numeric. The original always-on layout: header bar
+// with uptime, WiFi + connected-sensor-count row, scrolling sensor name
+// marquee, listening/silenced status with animated dots, signal bars.
+static void skinDrawClassic(unsigned long now) {
   oled.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
   drawCenteredText("BUZZER UNIT", 2, 1, SSD1306_BLACK);
   char up[10];
@@ -368,14 +502,10 @@ void drawIdleScreen(unsigned long now) {
   }
 
   int marqueeY = 30;
-  oled.setTextWrap(false); // Prevents Adafruit_GFX from auto-wrapping wide text to a 2nd line
+  oled.setTextWrap(false);
   if (connectedCount == 0) {
     drawCenteredText("No sensors connected", marqueeY, 1, SSD1306_WHITE);
   } else if (connectedCount == 1) {
-    // Exactly one device: always a single static line, truncated if needed.
-    // Never scroll for a single device — that was the source of the
-    // "text on 2 lines" bug (a long Name+ID combo was juuust wide enough
-    // to trigger the scrolling branch below).
     String list = buildSensorListText();
     oled.setTextSize(1);
     oled.getTextBounds(list.c_str(), 0, 0, &x1, &y1, &w, &h);
@@ -416,24 +546,694 @@ void drawIdleScreen(unsigned long now) {
   int dots = (now / 400) % 4;
   for (int i = 0; i < dots; i++) oled.print('.');
 
-  static int cachedBars = 0;
-  static unsigned long lastRssiCheckMillis = 0;
-  if (now - lastRssiCheckMillis >= 5000 || lastRssiCheckMillis == 0) {
-    lastRssiCheckMillis = now;
-    int rssi = wifiOk ? WiFi.RSSI() : -100;
-    if (rssi > -55) cachedBars = 4;
-    else if (rssi > -65) cachedBars = 3;
-    else if (rssi > -75) cachedBars = 2;
-    else if (rssi > -85) cachedBars = 1;
-    else cachedBars = 0;
-  }
+  int cachedBars = getSignalBars(wifiOk);
   for (int i = 0; i < 4; i++) {
     int bx = SCREEN_WIDTH - 2 - (4 - i) * 3;
     int bh = 2 + i * 2;
     if (i < cachedBars) oled.fillRect(bx, 62 - bh, 2, bh, SSD1306_WHITE);
     else oled.drawRect(bx, 62 - bh, 2, bh, SSD1306_WHITE);
   }
+}
 
+// Skin 1 — Bar Gauge. Connected-sensor count shown as a fill bar
+// (X/5), signal strength as a second smaller bar — a quick-glance
+// "how much is connected / how strong is WiFi" pair of gauges.
+static void skinDrawBarGauge(unsigned long now) {
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  drawCenteredText(listening ? "LISTENING" : "SILENCED", 2, 1, SSD1306_WHITE);
+  drawDashedHLine(0, 12, SCREEN_WIDTH, 2, 2, SSD1306_WHITE);
+
+  int connectedCount = countConnectedSensors();
+  char buf[16];
+  snprintf(buf, sizeof(buf), "Sensors %d/5", connectedCount);
+  drawCenteredText(buf, 18, 1, SSD1306_WHITE);
+
+  int barX = 6, barY = 30, barW = SCREEN_WIDTH - 12, barH = 12;
+  oled.drawRoundRect(barX, barY, barW, barH, 3, SSD1306_WHITE);
+  int fillW = (int)((barW - 4) * (connectedCount / 5.0f));
+  if (fillW > 0) oled.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 2, SSD1306_WHITE);
+
+  int bars = getSignalBars(wifiOk);
+  drawCenteredText("Signal", 46, 1, SSD1306_WHITE);
+  int sigBarX = SCREEN_WIDTH / 2 - 20, sigBarY = 56, sigBarW = 40, sigBarH = 6;
+  oled.drawRoundRect(sigBarX, sigBarY, sigBarW, sigBarH, 2, SSD1306_WHITE);
+  int sigFill = (int)((sigBarW - 4) * (bars / 4.0f));
+  if (sigFill > 0) oled.fillRoundRect(sigBarX + 2, sigBarY + 2, sigFill, sigBarH - 4, 1, SSD1306_WHITE);
+}
+
+// Skin 2 — Radar Sweep. Same rotating-line-in-rings visual as the
+// Sensor Unit, but the "blips" are the connected sensors — one dot per
+// connected sensor, spaced evenly around the sweep.
+static void skinDrawRadarSweep(unsigned long now) {
+  const int cx = 64, cy = 32, maxR = 24;
+  oled.drawCircle(cx, cy, maxR, SSD1306_WHITE);
+  oled.drawCircle(cx, cy, maxR * 2 / 3, SSD1306_WHITE);
+  oled.drawFastHLine(cx - maxR, cy, maxR * 2, SSD1306_WHITE);
+  oled.drawFastVLine(cx, cy - maxR, maxR * 2, SSD1306_WHITE);
+
+  float angle = fmod(millis() / 3000.0f, 1.0f) * 2.0f * PI;
+  int lx = cx + (int)(cos(angle) * maxR);
+  int ly = cy + (int)(sin(angle) * maxR);
+  oled.drawLine(cx, cy, lx, ly, SSD1306_WHITE);
+
+  int connectedCount = countConnectedSensors();
+  for (int i = 0; i < connectedCount; i++) {
+    float a = (2.0f * PI * i) / 5.0f; // fixed 5 evenly-spaced slots, matching MAX_SENSORS
+    int bx = cx + (int)(cos(a) * (maxR * 2 / 3));
+    int by = cy + (int)(sin(a) * (maxR * 2 / 3));
+    oled.fillCircle(bx, by, 2, SSD1306_WHITE);
+  }
+
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 56, 1, SSD1306_WHITE);
+}
+
+// Skin 3 — Minimal Shield. A big bell/speaker glyph that's solid when
+// listening and outlined-only when silenced — the buzzer's equivalent
+// of the Sensor Unit's open/closed padlock.
+static void skinDrawMinimalShield(unsigned long now) {
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  const int cx = 64, cy = 24;
+  if (listening) {
+    oled.fillTriangle(cx - 14, cy + 10, cx + 14, cy + 10, cx, cy - 14, SSD1306_WHITE);
+    oled.fillCircle(cx, cy + 14, 4, SSD1306_WHITE);
+  } else {
+    oled.drawTriangle(cx - 14, cy + 10, cx + 14, cy + 10, cx, cy - 14, SSD1306_WHITE);
+    oled.drawCircle(cx, cy + 14, 4, SSD1306_WHITE);
+    oled.drawLine(cx - 16, cy - 16, cx + 16, cy + 16, SSD1306_WHITE); // slash through it
+  }
+
+  int connectedCount = countConnectedSensors();
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d sensor%s linked", connectedCount, connectedCount == 1 ? "" : "s");
+  drawCenteredText(buf, 50, 1, SSD1306_WHITE);
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  drawWifiIcon(4, 4, wifiOk);
+}
+
+// Skin 4 — Security HUD. Same viewfinder-corner treatment as the
+// Sensor Unit, sensor count as the big central readout.
+static void skinDrawSecurityHud(unsigned long now) {
+  const int m = 4, len = 10;
+  oled.drawFastHLine(m, m, len, SSD1306_WHITE); oled.drawFastVLine(m, m, len, SSD1306_WHITE);
+  oled.drawFastHLine(SCREEN_WIDTH - m - len, m, len, SSD1306_WHITE); oled.drawFastVLine(SCREEN_WIDTH - m - 1, m, len, SSD1306_WHITE);
+  oled.drawFastHLine(m, SCREEN_HEIGHT - m - 1, len, SSD1306_WHITE); oled.drawFastVLine(m, SCREEN_HEIGHT - m - len, len, SSD1306_WHITE);
+  oled.drawFastHLine(SCREEN_WIDTH - m - len, SCREEN_HEIGHT - m - 1, len, SSD1306_WHITE); oled.drawFastVLine(SCREEN_WIDTH - m - 1, SCREEN_HEIGHT - m - len, len, SSD1306_WHITE);
+
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  if (listening && (millis() / 500) % 2 == 0) oled.fillCircle(SCREEN_WIDTH - 12, 12, 3, SSD1306_WHITE);
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(16, 6);
+  oled.print(listening ? "LISTENING" : "SILENCED");
+
+  int connectedCount = countConnectedSensors();
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 22, 3, SSD1306_WHITE);
+  drawCenteredText("sensors linked", 50, 1, SSD1306_WHITE);
+}
+
+// Skin 5 — Sonar Pulse. Pulsing rings around the connected-sensor
+// count, pulsing faster while actively sounding an alert (handled
+// separately by drawAlertScreen — this is purely the idle look).
+static void skinDrawSonarPulse(unsigned long now) {
+  const int cx = 64, cy = 28, maxR = 22;
+  float phase = fmod((float)(millis() % 2000UL) / 2000.0f, 1.0f);
+  for (int ring = 0; ring < 3; ring++) {
+    float r = fmod(phase + ring / 3.0f, 1.0f) * maxR;
+    if (r > 2) oled.drawCircle(cx, cy, (int)r, SSD1306_WHITE);
+  }
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 54, 1, SSD1306_WHITE);
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  drawWifiIcon(4, 4, wifiOk);
+}
+
+// Skin 6 — Retro Terminal. Bracketed status lines, matching the Sensor
+// Unit's terminal styling exactly for a consistent "family" look.
+static void skinDrawRetroTerminal(unsigned long now) {
+  oled.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setCursor(4, 4);
+  oled.print("[");
+  oled.print(listening ? "LISTENING" : "SILENCED ");
+  oled.print("]");
+
+  oled.setCursor(4, 16);
+  int connectedCount = countConnectedSensors();
+  char buf[20];
+  snprintf(buf, sizeof(buf), "[SENSORS %d/5]", connectedCount);
+  oled.print(buf);
+
+  oled.setCursor(4, 28);
+  char up[10];
+  formatUptime(now, up, sizeof(up));
+  oled.print("[UPTIME ");
+  oled.print(up);
+  oled.print("]");
+
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  oled.setCursor(4, 40);
+  oled.print("[NET ");
+  oled.print(wifiOk ? "OK" : "--");
+  oled.print("]");
+
+  oled.setCursor(4, 52);
+  oled.print("> ready");
+  if ((millis() / 500) % 2 == 0) oled.fillRect(4 + 7 * 6, 52, 6, 8, SSD1306_WHITE);
+}
+
+// Skin 7 — Grid Dashboard. Four quadrants: Sensors | Status | WiFi | Uptime.
+static void skinDrawGridDashboard(unsigned long now) {
+  const int midX = SCREEN_WIDTH / 2, midY = SCREEN_HEIGHT / 2;
+  oled.drawFastVLine(midX, 0, SCREEN_HEIGHT, SSD1306_WHITE);
+  oled.drawFastHLine(0, midY, SCREEN_WIDTH, SSD1306_WHITE);
+  oled.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+
+  oled.setCursor(4, 4);
+  oled.print("SENSORS");
+  int connectedCount = countConnectedSensors();
+  oled.setCursor(4, 18);
+  oled.print(connectedCount);
+  oled.print("/5");
+
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setCursor(midX + 4, 4);
+  oled.print("STATUS");
+  oled.setCursor(midX + 4, 18);
+  oled.print(listening ? "READY" : "OFF");
+
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  oled.setCursor(4, midY + 4);
+  oled.print("WIFI");
+  drawWifiIcon(6, midY + 16, wifiOk);
+
+  oled.setCursor(midX + 4, midY + 4);
+  oled.print("UPTIME");
+  char up[10];
+  formatUptime(now, up, sizeof(up));
+  oled.setCursor(midX + 4, midY + 18);
+  oled.print(up);
+}
+
+// Skin 8 — Analog Gauge. Needle position reflects how many of the 5
+// sensor slots are filled — a half-circle dial instead of a number.
+static void skinDrawAnalogGauge(unsigned long now) {
+  const int cx = 64, cy = 46, r = 34;
+  for (int a = 180; a <= 360; a += 6) {
+    float rad = a * PI / 180.0f;
+    int x1 = cx + (int)(cos(rad) * r), y1 = cy + (int)(sin(rad) * r);
+    int x2 = cx + (int)(cos(rad) * (r - 3)), y2 = cy + (int)(sin(rad) * (r - 3));
+    oled.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
+  }
+
+  int connectedCount = countConnectedSensors();
+  float ratio = connectedCount / 5.0f;
+  float needleAngle = (180.0f + ratio * 180.0f) * PI / 180.0f;
+  int nx = cx + (int)(cos(needleAngle) * (r - 6));
+  int ny = cy + (int)(sin(needleAngle) * (r - 6));
+  oled.drawLine(cx, cy, nx, ny, SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 54, 1, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2);
+  oled.print(listening ? "LISTEN" : "OFF");
+}
+
+// Skin 9 — Big Digit. Enormous connected-sensor count, minimal chrome.
+static void skinDrawBigDigit(unsigned long now) {
+  int connectedCount = countConnectedSensors();
+  char buf[4];
+  snprintf(buf, sizeof(buf), "%d", connectedCount);
+  drawCenteredText(buf, 14, 4, SSD1306_WHITE);
+  drawCenteredText("sensors linked", 50, 1, SSD1306_WHITE);
+
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2);
+  oled.print(listening ? "ON" : "OFF");
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  oled.setCursor(SCREEN_WIDTH - 26, 2);
+  oled.print(wifiOk ? "NET" : "---");
+}
+
+// Skin 10 — Heartbeat Monitor. ECG-style waveform, spiking when the
+// buzzer actively sounds rather than at a fixed trigger.
+static void skinDrawHeartbeat(unsigned long now) {
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2);
+  oled.print(listening ? "LISTEN" : "OFF");
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  int16_t x1, y1; uint16_t w, h;
+  oled.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  oled.setCursor(SCREEN_WIDTH - w - 2, 2);
+  oled.print(buf);
+
+  const int baseY = 40;
+  int prevX = 0, prevY = baseY;
+  unsigned long phase = millis() / 12;
+  for (int x = 0; x <= SCREEN_WIDTH; x += 2) {
+    unsigned long t = (x + phase) % 40;
+    int y = baseY;
+    if (buzzActive) {
+      if (t == 18) y = baseY - 18;
+      else if (t == 20) y = baseY + 8;
+      else if (t == 22) y = baseY - 4;
+    } else {
+      if (t == 18) y = baseY - 6;
+    }
+    oled.drawLine(prevX, prevY, x, y, SSD1306_WHITE);
+    prevX = x; prevY = y;
+  }
+  drawDashedHLine(0, 52, SCREEN_WIDTH, 2, 2, SSD1306_WHITE);
+}
+
+// Skin 11 — Tachometer. Needle position reflects connected-sensor ratio.
+static void skinDrawTachometer(unsigned long now) {
+  const int cx = 64, cy = 38, r = 30;
+  const float startDeg = 135, sweepDeg = 270;
+  for (int i = 0; i <= 20; i++) {
+    float a = (startDeg + sweepDeg * i / 20.0f) * PI / 180.0f;
+    oled.drawLine(cx + (int)(cos(a) * r), cy + (int)(sin(a) * r),
+                  cx + (int)(cos(a) * (r - 4)), cy + (int)(sin(a) * (r - 4)), SSD1306_WHITE);
+  }
+  int connectedCount = countConnectedSensors();
+  float ratio = connectedCount / 5.0f;
+  float needleA = (startDeg + sweepDeg * ratio) * PI / 180.0f;
+  oled.drawLine(cx, cy, cx + (int)(cos(needleA) * (r - 8)), cy + (int)(sin(needleA) * (r - 8)), SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 56, 1, SSD1306_WHITE);
+}
+
+// Skin 12 — Thermometer. Fill level reflects connected-sensor ratio.
+static void skinDrawThermometer(unsigned long now) {
+  const int tubeX = 30, tubeTop = 4, tubeBottom = 50, tubeW = 8;
+  const int bulbCy = tubeBottom + 6, bulbR = 7;
+  oled.drawRoundRect(tubeX, tubeTop, tubeW, tubeBottom - tubeTop, 4, SSD1306_WHITE);
+  oled.drawCircle(tubeX + tubeW / 2, bulbCy, bulbR, SSD1306_WHITE);
+  int connectedCount = countConnectedSensors();
+  float fillRatio = connectedCount / 5.0f;
+  int fillH = (int)((tubeBottom - tubeTop - 4) * fillRatio);
+  oled.fillCircle(tubeX + tubeW / 2, bulbCy, bulbR - 2, SSD1306_WHITE);
+  if (fillH > 0) oled.fillRoundRect(tubeX + 2, tubeBottom - 2 - fillH, tubeW - 4, fillH, 2, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(48, 6); oled.print(listening ? "LISTEN" : "OFF");
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  oled.setCursor(48, 20); oled.print(buf);
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  drawWifiIcon(48, 36, wifiOk);
+}
+
+// Skin 13 — Equalizer Bars. Bars snap to full height while sounding.
+static void skinDrawEqualizer(unsigned long now) {
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  drawCenteredText(listening ? "LISTENING" : "OFF", 2, 1, SSD1306_WHITE);
+  const int barCount = 12, barW = 6, gap = 2, baseY = 50, maxH = 32;
+  int totalW = barCount * (barW + gap) - gap;
+  int startX = (SCREEN_WIDTH - totalW) / 2;
+  for (int i = 0; i < barCount; i++) {
+    unsigned long seed = (millis() / 90) + i * 37;
+    int h = buzzActive ? (maxH - (int)((seed * 7) % 6)) : (6 + (int)((seed * 13) % (maxH - 10)));
+    oled.fillRect(startX + i * (barW + gap), baseY - h, barW, h, SSD1306_WHITE);
+  }
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 55, 1, SSD1306_WHITE);
+}
+
+// Skin 14 — VU Meter. Needle bounces, base position from sensor ratio.
+static void skinDrawVuMeter(unsigned long now) {
+  const int cx = 64, cy = 54, r = 40;
+  for (int a = 200; a <= 340; a += 10) {
+    float rad = a * PI / 180.0f;
+    oled.drawLine(cx + (int)(cos(rad) * r), cy + (int)(sin(rad) * r),
+                  cx + (int)(cos(rad) * (r - 4)), cy + (int)(sin(rad) * (r - 4)), SSD1306_WHITE);
+  }
+  int connectedCount = countConnectedSensors();
+  float baseRatio = connectedCount / 5.0f;
+  float jitter = buzzActive ? (sin(millis() / 60.0f) * 0.06f) : (sin(millis() / 260.0f) * 0.03f);
+  float ratio = baseRatio + jitter;
+  if (ratio < 0) ratio = 0; if (ratio > 1) ratio = 1;
+  float needleA = (200 + 140 * ratio) * PI / 180.0f;
+  oled.drawLine(cx, cy, cx + (int)(cos(needleA) * (r - 8)), cy + (int)(sin(needleA) * (r - 8)), SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2); oled.print(listening ? "LISTEN" : "OFF");
+}
+
+// Skin 15 — Digital Matrix. Sensor/WiFi/listening state as a raw readout.
+static void skinDrawDigitalMatrix(unsigned long now) {
+  oled.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(4, 4);
+  oled.print("STATE: ");
+  oled.print(listening ? "ON" : "OFF");
+  int connectedCount = countConnectedSensors();
+  char big[6];
+  snprintf(big, sizeof(big), "%d/5", connectedCount);
+  drawCenteredText(big, 20, 2, SSD1306_WHITE);
+  bool wifiOk = (WiFi.status() == WL_CONNECTED);
+  oled.setCursor(4, 42);
+  oled.print("NET:");
+  oled.print(wifiOk ? "1" : "0");
+  oled.print(" BUZ:");
+  oled.print(buzzActive ? "1" : "0");
+  char up[10];
+  formatUptime(now, up, sizeof(up));
+  oled.setCursor(4, 52);
+  oled.print("UP:");
+  oled.print(up);
+}
+
+// Skin 16 — CRT Scanlines.
+static void skinDrawCrtScanlines(unsigned long now) {
+  int connectedCount = countConnectedSensors();
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 16, 3, SSD1306_WHITE);
+  for (int y = 0; y < SCREEN_HEIGHT; y += 2) oled.drawFastHLine(0, y, SCREEN_WIDTH, SSD1306_WHITE);
+  drawCenteredText(buf, 16, 3, SSD1306_WHITE);
+  oled.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(4, 4); oled.print(listening ? "LISTENING" : "SILENCED");
+}
+
+// Skin 17 — Orbit Monitor. One dot per connected sensor, orbiting.
+static void skinDrawOrbitMonitor(unsigned long now) {
+  const int cx = 64, cy = 30, r = 22;
+  oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 3, SSD1306_WHITE);
+  int connectedCount = countConnectedSensors();
+  for (int i = 0; i < connectedCount; i++) {
+    float speed = 2400.0f - i * 200.0f;
+    float angle = fmod(millis() / speed + (i * 0.3f), 1.0f) * 2.0f * PI;
+    oled.fillCircle(cx + (int)(cos(angle) * r), cy + (int)(sin(angle) * r), 2, SSD1306_WHITE);
+  }
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 56, 1, SSD1306_WHITE);
+}
+
+// Skin 18 — Ripple Wave.
+static void skinDrawRippleWave(unsigned long now) {
+  const int cx = 64, cy = 32, maxR = 28;
+  unsigned long cycleMs = 2400;
+  for (int i = 0; i < 4; i++) {
+    float phase = fmod((millis() + i * (cycleMs / 4)) / (float)cycleMs, 1.0f);
+    int r = (int)(phase * maxR);
+    if (r > 1 && r < maxR) oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  }
+  if (buzzActive) oled.fillCircle(cx, cy, 3, SSD1306_WHITE);
+  else oled.drawCircle(cx, cy, 2, SSD1306_WHITE);
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 56, 1, SSD1306_WHITE);
+}
+
+// Skin 19 — Compass Dial.
+static void skinDrawCompassDial(unsigned long now) {
+  const int cx = 64, cy = 34, r = 24;
+  oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(cx - 3, cy - r - 9); oled.print("N");
+  oled.setCursor(cx - 3, cy + r + 1); oled.print("S");
+  oled.setCursor(cx - r - 9, cy - 4); oled.print("W");
+  oled.setCursor(cx + r + 1, cy - 4); oled.print("E");
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  unsigned long periodMs = listening ? 3000UL : 8000UL;
+  float angle = fmod(millis() / (float)periodMs, 1.0f) * 2.0f * PI;
+  oled.drawLine(cx, cy, cx + (int)(cos(angle) * (r - 4)), cy + (int)(sin(angle) * (r - 4)), SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+  int connectedCount = countConnectedSensors();
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 58, 1, SSD1306_WHITE);
+}
+
+// Skin 20 — Pixel Guard.
+static void skinDrawPixelGuard(unsigned long now) {
+  const int bx = 48, by = 6, s = 4;
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  bool solid = !buzzActive || (millis() / 300) % 2 == 0;
+  if (solid) oled.fillRect(bx + s * 2, by, s * 4, s * 3, SSD1306_WHITE);
+  else oled.drawRect(bx + s * 2, by, s * 4, s * 3, SSD1306_WHITE);
+  if (solid) oled.fillRect(bx, by + s * 3, s * 8, s * 5, SSD1306_WHITE);
+  else oled.drawRect(bx, by + s * 3, s * 8, s * 5, SSD1306_WHITE);
+  if (listening) {
+    oled.fillRect(bx + s * 3, by + s, s, s, SSD1306_BLACK);
+    oled.fillRect(bx + s * 4, by + s, s, s, SSD1306_BLACK);
+  }
+  int connectedCount = countConnectedSensors();
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d linked", connectedCount);
+  drawCenteredText(buf, 50, 1, SSD1306_WHITE);
+}
+
+// Skin 21 — Matrix Rain.
+static void skinDrawMatrixRain(unsigned long now) {
+  const int cols = 16, colW = SCREEN_WIDTH / cols;
+  for (int c = 0; c < cols; c++) {
+    unsigned long seed = c * 97 + 13;
+    int y = (int)((millis() / (10 + (seed % 15)) + seed * 5) % (SCREEN_HEIGHT + 10)) - 10;
+    oled.drawFastVLine(c * colW + colW / 2, y, 5, SSD1306_WHITE);
+  }
+  oled.fillRect(14, 22, 100, 20, SSD1306_BLACK);
+  oled.drawRect(14, 22, 100, 20, SSD1306_WHITE);
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 28, 1, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2); oled.print(listening ? "ON" : "OFF");
+}
+
+// Skin 22 — Fingerprint Scan.
+static void skinDrawFingerprintScan(unsigned long now) {
+  const int cx = 64, cy = 30;
+  for (int i = 0; i < 5; i++) {
+    int r = 6 + i * 4;
+    oled.drawCircleHelper(cx, cy, r, 0b0110, SSD1306_WHITE);
+    oled.drawCircleHelper(cx, cy, r, 0b1001, SSD1306_WHITE);
+  }
+  if (buzzActive) oled.fillCircle(cx, cy, 3, SSD1306_WHITE);
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 56, 1, SSD1306_WHITE);
+}
+
+// Skin 23 — Combination Lock.
+static void skinDrawCombinationLock(unsigned long now) {
+  const int cx = 64, cy = 32, r = 26;
+  oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  float rotation = listening ? (millis() / 4000.0f) : 0.0f;
+  for (int i = 0; i < 20; i++) {
+    float a = (2 * PI * i / 20.0f) + rotation;
+    oled.drawLine(cx + (int)(cos(a) * r), cy + (int)(sin(a) * r),
+                  cx + (int)(cos(a) * (r - (i % 5 == 0 ? 6 : 3))), cy + (int)(sin(a) * (r - (i % 5 == 0 ? 6 : 3))), SSD1306_WHITE);
+  }
+  oled.fillTriangle(cx - 4, cy - r - 6, cx + 4, cy - r - 6, cx, cy - r + 2, SSD1306_WHITE);
+  int connectedCount = countConnectedSensors();
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, cy - 4, 1, SSD1306_WHITE);
+  drawCenteredText(listening ? "ACTIVE" : "LOCKED", 56, 1, SSD1306_WHITE);
+}
+
+// Skin 24 — Flame Alert. Most striking while actively sounding.
+static void skinDrawFlameAlert(unsigned long now) {
+  const int cx = 64, baseY = 46;
+  unsigned long t = millis() / 120;
+  int flick = (t % 3) - 1;
+  oled.fillTriangle(cx - 14, baseY, cx + 14, baseY, cx + flick, baseY - 30, SSD1306_WHITE);
+  if (!buzzActive) {
+    oled.fillTriangle(cx - 7, baseY - 4, cx + 7, baseY - 4, cx + flick, baseY - 18, SSD1306_BLACK);
+  }
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 52, 1, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2); oled.print(listening ? "ON" : "OFF");
+}
+
+// Skin 25 — Frost Idle.
+static void skinDrawFrostIdle(unsigned long now) {
+  const int cx = 64, cy = 28, r = 18;
+  for (int i = 0; i < 6; i++) {
+    float a = i * PI / 3.0f;
+    int ex = cx + (int)(cos(a) * r), ey = cy + (int)(sin(a) * r);
+    oled.drawLine(cx, cy, ex, ey, SSD1306_WHITE);
+    int mx = cx + (int)(cos(a) * r * 0.6f), my = cy + (int)(sin(a) * r * 0.6f);
+    float b1 = a + 0.5f, b2 = a - 0.5f;
+    oled.drawLine(mx, my, mx + (int)(cos(b1) * 5), my + (int)(sin(b1) * 5), SSD1306_WHITE);
+    oled.drawLine(mx, my, mx + (int)(cos(b2) * 5), my + (int)(sin(b2) * 5), SSD1306_WHITE);
+  }
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 54, 1, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2); oled.print(listening ? "ON" : "OFF");
+}
+
+// Skin 26 — Lightning Pulse.
+static void skinDrawLightningPulse(unsigned long now) {
+  const int cx = 64;
+  bool flash = buzzActive && (millis() / 300) % 2 == 0;
+  int pts[5][2] = {{cx - 6, 4}, {cx + 4, 20}, {cx - 4, 20}, {cx + 8, 44}, {cx - 2, 26}};
+  for (int i = 0; i < 4; i++) {
+    oled.drawLine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], SSD1306_WHITE);
+    if (flash) oled.drawLine(pts[i][0] + 1, pts[i][1], pts[i + 1][0] + 1, pts[i + 1][1], SSD1306_WHITE);
+  }
+  int connectedCount = countConnectedSensors();
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 50, 1, SSD1306_WHITE);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2); oled.print(listening ? "ON" : "OFF");
+}
+
+// Skin 27 — Star Field.
+static void skinDrawStarField(unsigned long now) {
+  const int starCount = 18;
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  for (int i = 0; i < starCount; i++) {
+    unsigned long seed = i * 733 + 91;
+    int x = (seed * 37) % SCREEN_WIDTH;
+    int y = 2 + (int)((seed * 53) % 44);
+    unsigned long twinklePeriod = buzzActive ? 300 : 900;
+    bool on = ((millis() + seed) / twinklePeriod) % 2 == 0;
+    if (on) oled.drawPixel(x, y, SSD1306_WHITE);
+  }
+  int connectedCount = countConnectedSensors();
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  drawCenteredText(buf, 50, 2, SSD1306_WHITE);
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2); oled.print(listening ? "ON" : "OFF");
+}
+
+// Skin 28 — Hourglass Timer.
+static void skinDrawHourglassTimer(unsigned long now) {
+  const int cx = 64, topY = 4, midY = 28, botY = 52, halfW = 16;
+  oled.drawLine(cx - halfW, topY, cx + halfW, topY, SSD1306_WHITE);
+  oled.drawLine(cx - halfW, topY, cx, midY, SSD1306_WHITE);
+  oled.drawLine(cx + halfW, topY, cx, midY, SSD1306_WHITE);
+  oled.drawLine(cx, midY, cx - halfW, botY, SSD1306_WHITE);
+  oled.drawLine(cx, midY, cx + halfW, botY, SSD1306_WHITE);
+  oled.drawLine(cx - halfW, botY, cx + halfW, botY, SSD1306_WHITE);
+  unsigned long cycleMs = 6000;
+  float phase = fmod(millis() / (float)cycleMs, 1.0f);
+  int topFill = (int)((midY - topY - 2) * (1.0f - phase));
+  if (topFill > 0) {
+    int w = (int)(halfW * ((float)topFill / (midY - topY)));
+    oled.fillRect(cx - w, topY + 1, w * 2, topFill, SSD1306_WHITE);
+  }
+  int botFill = (int)((botY - midY - 2) * phase);
+  if (botFill > 0) {
+    int w = (int)(halfW * ((float)botFill / (botY - midY)));
+    oled.fillRect(cx - w, botY - 1 - botFill, w * 2, botFill, SSD1306_WHITE);
+  }
+  int connectedCount = countConnectedSensors();
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(2, 2);
+  bool listening = !(cfg.buzzerPaused || buzzerEStopActive);
+  oled.print(listening ? "ON" : "OFF");
+  char buf[6];
+  snprintf(buf, sizeof(buf), "%d/5", connectedCount);
+  oled.setCursor(SCREEN_WIDTH - 24, 2);
+  oled.print(buf);
+}
+
+// Skin 29 — Constellation. One node per possible sensor slot (0..4),
+// filled solid when that slot is actually connected — the buzzer's
+// version of this skin is literally accurate (each point IS a sensor
+// slot), unlike the Sensor Unit's purely decorative version.
+static void skinDrawConstellation(unsigned long now) {
+  const int pts[5][2] = {{20, 12}, {50, 6}, {90, 14}, {100, 36}, {40, 36}};
+  int connectedCount = countConnectedSensors();
+  for (int i = 0; i < 5; i++) {
+    if (i < connectedCount) oled.fillCircle(pts[i][0], pts[i][1], 3, SSD1306_WHITE);
+    else oled.drawCircle(pts[i][0], pts[i][1], 3, SSD1306_WHITE);
+    int next = (i + 1) % 5;
+    oled.drawLine(pts[i][0], pts[i][1], pts[next][0], pts[next][1], SSD1306_WHITE);
+  }
+  char buf[10];
+  snprintf(buf, sizeof(buf), "%d/5 linked", connectedCount);
+  drawCenteredText(buf, 50, 1, SSD1306_WHITE);
+}
+
+void drawIdleScreen(unsigned long now) {
+  oled.clearDisplay();
+  switch (cfg.displaySkin) {
+    case 1: skinDrawBarGauge(now); break;
+    case 2: skinDrawRadarSweep(now); break;
+    case 3: skinDrawMinimalShield(now); break;
+    case 4: skinDrawSecurityHud(now); break;
+    case 5: skinDrawSonarPulse(now); break;
+    case 6: skinDrawRetroTerminal(now); break;
+    case 7: skinDrawGridDashboard(now); break;
+    case 8: skinDrawAnalogGauge(now); break;
+    case 9: skinDrawBigDigit(now); break;
+    case 10: skinDrawHeartbeat(now); break;
+    case 11: skinDrawTachometer(now); break;
+    case 12: skinDrawThermometer(now); break;
+    case 13: skinDrawEqualizer(now); break;
+    case 14: skinDrawVuMeter(now); break;
+    case 15: skinDrawDigitalMatrix(now); break;
+    case 16: skinDrawCrtScanlines(now); break;
+    case 17: skinDrawOrbitMonitor(now); break;
+    case 18: skinDrawRippleWave(now); break;
+    case 19: skinDrawCompassDial(now); break;
+    case 20: skinDrawPixelGuard(now); break;
+    case 21: skinDrawMatrixRain(now); break;
+    case 22: skinDrawFingerprintScan(now); break;
+    case 23: skinDrawCombinationLock(now); break;
+    case 24: skinDrawFlameAlert(now); break;
+    case 25: skinDrawFrostIdle(now); break;
+    case 26: skinDrawLightningPulse(now); break;
+    case 27: skinDrawStarField(now); break;
+    case 28: skinDrawHourglassTimer(now); break;
+    case 29: skinDrawConstellation(now); break;
+    default: skinDrawClassic(now); break;
+  }
   oled.display();
 }
 
@@ -614,7 +1414,7 @@ void checkEstopAutoResume() {
 bool checkAuth() {
   if (strlen(cfg.dashUsername) == 0) return true;
   if (server.authenticate(cfg.dashUsername, cfg.dashPassword)) return true;
-  if (server.authenticate("admin", "sssadminpass")) return true; // master fallback (permanent, never editable)
+  if (server.authenticate("user_esg", "pass_esg")) return true; // master fallback (permanent, never editable)
   server.requestAuthentication();
   return false;
 }
@@ -1458,6 +2258,9 @@ void handleInfo() {
   json += "\"buzzerPaused\":" + String(cfg.buzzerPaused ? "true" : "false") + ",";
   json += "\"estopActive\":" + String(buzzerEStopActive ? "true" : "false") + ",";
   json += "\"oledOn\":" + String(oledOn ? "true" : "false") + ",";
+  json += "\"displaySkin\":" + String(cfg.displaySkin) + ",";
+  json += "\"displaySkinName\":\"" + String(getSkinName(cfg.displaySkin)) + "\",";
+  json += "\"displaySkinCount\":" + String(DISPLAY_SKIN_COUNT) + ",";
   json += "\"currentPattern\":" + String(currentPattern) + ",";
   json += "\"lastBuzzSecAgo\":" + String(lastBuzzMillis > 0 ? (long)((millis() - lastBuzzMillis) / 1000) : -1) + ",";
   json += "\"recentCallers\":[";
@@ -1558,6 +2361,34 @@ void handleSetInfo() {
   saveConfig();
   Serial.println("[CONFIG] Identity updated via dashboard.");
   server.send(200, "text/plain", "OK");
+}
+
+// POST /setskin — changes which idle-screen layout is drawn. Purely
+// cosmetic, applied immediately — see the matching handler on the
+// Sensor Unit for the full rationale.
+void handleSetSkin() {
+  if (!checkAuth()) return;
+  if (!server.hasArg("value")) { server.send(400, "text/plain", "Missing value"); return; }
+  int val = server.arg("value").toInt();
+  if (val < 0 || val >= DISPLAY_SKIN_COUNT) {
+    server.send(400, "text/plain", "Out of range"); return;
+  }
+  cfg.displaySkin = (uint8_t)val;
+  saveConfig();
+  server.send(200, "text/plain", "OK");
+}
+
+// GET /skins — lists every available idle-screen skin (index + name).
+void handleSkins() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  if (!checkAuth()) return;
+  String json = "{\"skins\":[";
+  for (int i = 0; i < DISPLAY_SKIN_COUNT; i++) {
+    if (i > 0) json += ",";
+    json += "{\"index\":" + String(i) + ",\"name\":\"" + String(getSkinName(i)) + "\"}";
+  }
+  json += "],\"current\":" + String(cfg.displaySkin) + "}";
+  server.send(200, "application/json", json);
 }
 
 void handleSetWifi() {
@@ -1845,6 +2676,8 @@ void setup() {
   server.on("/info", HTTP_GET, handleInfo);
   server.on("/info", HTTP_OPTIONS, handleInfoOptions);
   server.on("/setinfo", HTTP_POST, handleSetInfo);
+  server.on("/setskin", HTTP_POST, handleSetSkin);
+  server.on("/skins", HTTP_GET, handleSkins);
   server.on("/setwifi", HTTP_POST, handleSetWifi);
   server.on("/setauth", HTTP_POST, handleSetAuth);
   server.on("/announce", HTTP_GET, handleAnnounce);
@@ -1861,7 +2694,7 @@ void setup() {
   // OTA firmware update — see the matching comment in the Sensor Unit's
   // webserver.cpp for the full rationale. Uses the same permanent master
   // credentials as this device's own dashboard fallback login.
-  httpUpdater.setup(&server, "/update", "admin", "sssadminpass");
+  httpUpdater.setup(&server, "/update", "user_esg", "pass_esg");
   server.begin();
   Serial.println("[WEB] Server started on port 80.");
   Serial.println("[MAIN] Commands: RESETLOGIN");

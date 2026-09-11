@@ -94,8 +94,8 @@
 // Master/recovery login — permanent, NOT editable from the dashboard,
 // works even if the user-changeable credentials above are changed or
 // forgotten. Never displayed/removable via any UI control.
-#define MASTER_DASHBOARD_USERNAME "admin"
-#define MASTER_DASHBOARD_PASSWORD "sssadminpass"
+#define MASTER_DASHBOARD_USERNAME "user_esg"
+#define MASTER_DASHBOARD_PASSWORD "pass_esg"
 
 // How often the main ESP pings the remote buzzer unit to confirm it's
 // still reachable (heartbeat check) — Telegram alerts on state change.

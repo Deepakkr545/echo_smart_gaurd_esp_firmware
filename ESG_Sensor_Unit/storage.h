@@ -104,6 +104,12 @@ struct Settings {
   uint32_t historyEnd[5];       // Ring buffer: past sessions' end times
   uint8_t  historyCount;        // Total sessions ever recorded (index = count % 5)
 
+  // --- OLED reading-screen skin (added v10) ---
+  // Selects which visual style showReadingScreen() draws — see the
+  // Display::Skin enum in display.h for the full list. Purely cosmetic;
+  // never affects sensing/alarm logic.
+  uint8_t  displaySkin;
+
   uint16_t checksum;           // Computed over all fields above.
 };
 
