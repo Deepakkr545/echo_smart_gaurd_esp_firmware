@@ -1,0 +1,15 @@
+{
+  "latest_version": "1.0.0",
+  "min_supported_version": "1.0.0",
+  "release_date": "2026-09-12",
+  "download_url": "https://github.com/Deepakkr545/echo_smart_gaurd_esp_firmware/releases/download/buzzer-v1.0.0/ESG_Buzzer_Unit.bin",
+  "file_size_bytes": 0,
+  "sha256": "",
+  "mandatory": false,
+  "changelog": {
+    "new_features": [
+      "First version published through the in-app update checker"
+    ],
+    "bug_fixes": []
+  }
+}

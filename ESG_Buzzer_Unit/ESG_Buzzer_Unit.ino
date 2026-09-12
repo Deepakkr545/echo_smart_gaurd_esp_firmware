@@ -38,6 +38,7 @@
 // ---------------------------------------------------------------------
 #define BUZZ_EEPROM_SIZE 700
 #define BUZZ_MAGIC "BZ06"
+#define FIRMWARE_VERSION "1.0.0" // Buzzer Unit firmware version — exposed in /info for the app's OTA update-check
 #define MAX_MANUAL_SENSORS 5
 #define BUZZ_NTP_GMT_OFFSET_SEC 19800 // IST +5:30, same as main sensor ESP
 
@@ -2383,6 +2384,7 @@ void handleInfo() {
   json.reserve(1800);
   json += "\"name\":\"" + String(cfg.name) + "\",";
   json += "\"id\":\"" + String(cfg.id) + "\",";
+  json += "\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) + "\",";
   json += "\"buzzActive\":" + String(buzzActive ? "true" : "false") + ",";
   json += "\"buzzerPaused\":" + String(cfg.buzzerPaused ? "true" : "false") + ",";
   json += "\"estopActive\":" + String(buzzerEStopActive ? "true" : "false") + ",";

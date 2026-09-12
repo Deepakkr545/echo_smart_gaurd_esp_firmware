@@ -1874,6 +1874,7 @@ static void handleStatus() {
   json += "\"longBuzzerPattern\":" + String(gSettings->longTermBuzzerPattern) + ",";
   json += "\"deviceName\":\"" + String(gSettings->deviceName) + "\",";
   json += "\"deviceId\":\"" + String(gSettings->deviceId) + "\",";
+  json += "\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) + "\",";
 
   // --- Multi-buzzer arrays ---
   {
