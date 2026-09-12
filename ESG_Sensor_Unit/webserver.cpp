@@ -1789,7 +1789,6 @@ static String systemSettingsText() {
 static void handleSystemSettings() { if (!checkAuth()) return;
   String s = systemSettingsText();
   httpServer.send(200, "text/plain", s);
-  Notify::sendTextMessage(s);
 }
 
 static void handleStatusOptions() {
@@ -1928,8 +1927,18 @@ static void handleStatus() {
   httpServer.send(200, "application/json", json);
 }
 
-static void handleArm() { if (!checkAuth()) return; *gArmed = true; *gArmedByNightMode = false; gSettings->armed = true; Storage::save(*gSettings); httpServer.send(200,"text/plain","OK"); }
-static void handleDisarm() { if (!checkAuth()) return; *gArmed = false; *gArmedByNightMode = false; gSettings->armed = false; Storage::save(*gSettings); httpServer.send(200,"text/plain","OK"); }
+static void handleArm() { if (!checkAuth()) return;
+  bool wasArmed = *gArmed;
+  *gArmed = true; *gArmedByNightMode = false; gSettings->armed = true; Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+  if (!wasArmed) Notify::sendTextMessage("🛡️ System Armed");
+}
+static void handleDisarm() { if (!checkAuth()) return;
+  bool wasArmed = *gArmed;
+  *gArmed = false; *gArmedByNightMode = false; gSettings->armed = false; Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+  if (wasArmed) Notify::sendTextMessage("🔓 System Disarmed");
+}
 static void handleTest() { if (!checkAuth()) return; Alarm::testBuzzer(*gSettings); httpServer.send(200,"text/plain","OK"); }
 static void handleStop() { if (!checkAuth()) return; Alarm::emergencyStop(*gSettings); httpServer.send(200,"text/plain","OK"); }
 static void handleBuzzerOn() { if (!checkAuth()) return; gSettings->buzzerMasterEnabled = true; Storage::save(*gSettings); httpServer.send(200,"text/plain","OK"); }
@@ -1937,12 +1946,10 @@ static void handleBuzzerOff() { if (!checkAuth()) return; gSettings->buzzerMaste
 static void handleOledOn() { if (!checkAuth()) return;
   gSettings->oledOn = true; Storage::save(*gSettings); Display::setPower(true);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("💡 OLED Screen turned ON");
 }
 static void handleOledOff() { if (!checkAuth()) return;
   gSettings->oledOn = false; Storage::save(*gSettings); Display::setPower(false);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("💡 OLED Screen turned OFF");
 }
 static void handleRestart() { if (!checkAuth()) return;
   recordShutdownTimestamp();
@@ -1976,7 +1983,6 @@ static void handleSetTrigger() { if (!checkAuth()) return;
   gSettings->triggerDistanceCm = val;
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🎯 Trigger Distance Updated\n\nNew value: " + String(val,1) + " cm");
 }
 
 // POST /setskin — changes which OLED reading-screen layout is drawn.
@@ -2026,7 +2032,6 @@ static void handleSetDeviceInfo() { if (!checkAuth()) return;
   id.toCharArray(gSettings->deviceId, sizeof(gSettings->deviceId));
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🏷️ Device Identity Updated\n\nName: " + name + "\nID: " + id);
 }
 
 static void handleSetAuth() { if (!checkAuth()) return;
@@ -2080,7 +2085,6 @@ static void handleSetSiblings() { if (!checkAuth()) return;
   list.toCharArray(gSettings->siblingDevices, sizeof(gSettings->siblingDevices));
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🗂️ Other Devices list updated.");
 }
 
 static void handleSetBuzzerIps() { if (!checkAuth()) return;
@@ -2113,7 +2117,6 @@ static void handleSetBuzzerIps() { if (!checkAuth()) return;
 
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🔊 Buzzer Units Updated\n\n" + String(slot) + " device(s) configured.");
 }
 
 static void handleRemoveBuzzerIp() { if (!checkAuth()) return;
@@ -2139,7 +2142,6 @@ static void handleRemoveBuzzerIp() { if (!checkAuth()) return;
 
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🗑️ Buzzer Removed\n\n" + ip + " has been removed from the saved buzzer list.");
 }
 
 static void handleSetBuzzerTimes() { if (!checkAuth()) return;
@@ -2165,10 +2167,6 @@ static void handleSetBuzzerTimes() { if (!checkAuth()) return;
   gSettings->longTermBuzzerPattern = longPattern;
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  const char* patNames[] = {"", "Continuous", "Slow Pulse", "Fast Pulse", "Double-Beep Burst"};
-  Notify::sendTextMessage("⏱️ Buzzer Timing Updated\n\nShort-term duration: " + String(shortSec) +
-                           "s (" + patNames[shortPattern] + ")\nLong-term (sustained) duration: " + String(longSec) +
-                           "s (" + patNames[longPattern] + ")\nSustained activity threshold: " + String(thresholdSec) + "s");
 }
 
 static void handleSetTelegram() { if (!checkAuth()) return;
@@ -2199,14 +2197,20 @@ static void handleRemoveTelegram() { if (!checkAuth()) return;
 }
 
 static void handleNightOn() { if (!checkAuth()) return;
+  bool wasOff = !gSettings->nightMode; // edge-detect — Vacation mode may call this repeatedly even when already on
   gSettings->nightMode = true; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🌙 Night Mode Enabled\n\nSystem will auto-arm between 10 PM and 7 AM.");
+  if (wasOff) {
+    Notify::sendTextMessage("🌙 Night Mode Enabled\n\nSystem will auto-arm between 10 PM and 7 AM.");
+  }
 }
 static void handleNightOff() { if (!checkAuth()) return;
+  bool wasOn = gSettings->nightMode;
   gSettings->nightMode = false; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🌙 Night Mode Disabled");
+  if (wasOn) {
+    Notify::sendTextMessage("🌙 Night Mode Disabled");
+  }
 }
 static void handleMute() { if (!checkAuth()) return;
   gSettings->alarmEnabled = false;

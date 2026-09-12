@@ -447,6 +447,7 @@ void loop() {
         armed = true;
         armedByNightMode = true;
         Serial.println("[MAIN] Night Mode: auto-arming.");
+        Notify::sendTextMessage("🌙 Night Mode Started\n\nSystem automatically armed for the night.");
       } else if (!isNight && armedByNightMode) {
         armed = false;
         armedByNightMode = false;

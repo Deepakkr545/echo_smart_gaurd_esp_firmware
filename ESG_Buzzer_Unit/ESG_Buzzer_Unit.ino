@@ -25,6 +25,7 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPUpdateServer.h> // OTA firmware updates via /update — see the app's OTA_FIRMWARE_SETUP.md
+#include <WiFiClientSecure.h> // Telegram integration (added BZ06)
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -36,7 +37,7 @@
 // Persisted config
 // ---------------------------------------------------------------------
 #define BUZZ_EEPROM_SIZE 700
-#define BUZZ_MAGIC "BZ05"
+#define BUZZ_MAGIC "BZ06"
 #define MAX_MANUAL_SENSORS 5
 #define BUZZ_NTP_GMT_OFFSET_SEC 19800 // IST +5:30, same as main sensor ESP
 
@@ -70,9 +71,36 @@ struct BuzzerConfig {
   uint32_t wifiReconnectLog[5]; // WiFi connect/reconnect event timestamps
   uint8_t wifiReconnectCount;
   uint8_t displaySkin;       // Idle-screen skin (added BZ05) — see DISPLAY_SKIN_COUNT/skin drawing functions below
+  char telegramBotToken[48]; // added BZ06 — Buzzer Unit's own Telegram integration
+  char telegramChatId[16];
+  bool telegramEnabled;       // master mute for THIS device's Telegram alerts (independent of buzzerPaused)
   uint16_t checksum;
 };
 BuzzerConfig cfg;
+
+// BuzzerConfig exactly as it existed at BZ05 (before Telegram fields) —
+// kept so loadConfig() can migrate an existing device's settings
+// forward instead of wiping them.
+struct BuzzerConfigV5 {
+  char magic[4];
+  char name[24];
+  char id[24];
+  char wifiSSID[32];
+  char wifiPassword[64];
+  char dashUsername[20];
+  char dashPassword[24];
+  ManualSensorEntry manualSensors[MAX_MANUAL_SENSORS];
+  bool buzzerPaused;
+  uint32_t sessionStartEpoch;
+  uint32_t lastAliveEpoch;
+  uint32_t historyStart[5];
+  uint32_t historyEnd[5];
+  uint8_t historyCount;
+  uint32_t wifiReconnectLog[5];
+  uint8_t wifiReconnectCount;
+  uint8_t displaySkin;
+  uint16_t checksum;
+};
 
 // BuzzerConfig exactly as it existed at BZ04 (before displaySkin) — kept
 // so loadConfig() can migrate an existing device's WiFi/name/manual-
@@ -105,6 +133,12 @@ static uint16_t computeConfigChecksum(const BuzzerConfig &c) {
   for (size_t i = 0; i < offsetof(BuzzerConfig, checksum); i++) sum += b[i];
   return sum;
 }
+static uint16_t computeConfigChecksumV5(const BuzzerConfigV5 &c) {
+  const uint8_t *b = (const uint8_t*)&c;
+  uint16_t sum = 0;
+  for (size_t i = 0; i < offsetof(BuzzerConfigV5, checksum); i++) sum += b[i];
+  return sum;
+}
 static uint16_t computeConfigChecksumV4(const BuzzerConfigV4 &c) {
   const uint8_t *b = (const uint8_t*)&c;
   uint16_t sum = 0;
@@ -121,7 +155,36 @@ void loadConfig() {
   EEPROM.begin(BUZZ_EEPROM_SIZE);
   EEPROM.get(0, cfg);
   if (memcmp(cfg.magic, BUZZ_MAGIC, 4) == 0 && cfg.checksum == computeConfigChecksum(cfg)) {
-    Serial.println("[CONFIG] Loaded config from EEPROM (BZ05).");
+    Serial.println("[CONFIG] Loaded config from EEPROM (BZ06).");
+    return;
+  }
+
+  // Current-version load failed — check whether this is actually a
+  // BZ05 device (the version right before Telegram fields were added)
+  // before assuming the EEPROM is genuinely blank/corrupted.
+  BuzzerConfigV5 v5;
+  EEPROM.get(0, v5);
+  if (memcmp(v5.magic, "BZ05", 4) == 0 && v5.checksum == computeConfigChecksumV5(v5)) {
+    Serial.println("[CONFIG] Migrating BZ05 -> BZ06 (all settings preserved, Telegram starts unconfigured).");
+    memset(&cfg, 0, sizeof(cfg));
+    memcpy(cfg.name, v5.name, sizeof(cfg.name));
+    memcpy(cfg.id, v5.id, sizeof(cfg.id));
+    memcpy(cfg.wifiSSID, v5.wifiSSID, sizeof(cfg.wifiSSID));
+    memcpy(cfg.wifiPassword, v5.wifiPassword, sizeof(cfg.wifiPassword));
+    memcpy(cfg.dashUsername, v5.dashUsername, sizeof(cfg.dashUsername));
+    memcpy(cfg.dashPassword, v5.dashPassword, sizeof(cfg.dashPassword));
+    memcpy(cfg.manualSensors, v5.manualSensors, sizeof(cfg.manualSensors));
+    cfg.buzzerPaused = v5.buzzerPaused;
+    cfg.sessionStartEpoch = v5.sessionStartEpoch;
+    cfg.lastAliveEpoch = v5.lastAliveEpoch;
+    memcpy(cfg.historyStart, v5.historyStart, sizeof(cfg.historyStart));
+    memcpy(cfg.historyEnd, v5.historyEnd, sizeof(cfg.historyEnd));
+    cfg.historyCount = v5.historyCount;
+    memcpy(cfg.wifiReconnectLog, v5.wifiReconnectLog, sizeof(cfg.wifiReconnectLog));
+    cfg.wifiReconnectCount = v5.wifiReconnectCount;
+    cfg.displaySkin = v5.displaySkin;
+    cfg.telegramEnabled = true; // default on, matching Sensor Unit's alarmEnabled default
+    saveConfig();
     return;
   }
 
@@ -131,7 +194,7 @@ void loadConfig() {
   BuzzerConfigV4 old;
   EEPROM.get(0, old);
   if (memcmp(old.magic, "BZ04", 4) == 0 && old.checksum == computeConfigChecksumV4(old)) {
-    Serial.println("[CONFIG] Migrating BZ04 -> BZ05 (all settings preserved, displaySkin defaults to Classic).");
+    Serial.println("[CONFIG] Migrating BZ04 -> BZ06 (all settings preserved, displaySkin defaults to Classic, Telegram starts unconfigured).");
     memset(&cfg, 0, sizeof(cfg));
     memcpy(cfg.name, old.name, sizeof(cfg.name));
     memcpy(cfg.id, old.id, sizeof(cfg.id));
@@ -149,17 +212,19 @@ void loadConfig() {
     memcpy(cfg.wifiReconnectLog, old.wifiReconnectLog, sizeof(cfg.wifiReconnectLog));
     cfg.wifiReconnectCount = old.wifiReconnectCount;
     cfg.displaySkin = 0; // Classic — the only genuinely new field
+    cfg.telegramEnabled = true;
     saveConfig();
     return;
   }
 
-  // Neither the current nor the previous version's checksum matched —
+  // Neither the current nor any previous version's checksum matched —
   // truly blank/foreign flash, or corrupted beyond recovery. Fall back
   // to factory defaults, same as before.
   memset(&cfg, 0, sizeof(cfg));
   strncpy(cfg.name, "Unnamed Buzzer", sizeof(cfg.name) - 1);
   strncpy(cfg.id, "Buzzer Unit", sizeof(cfg.id) - 1);
   cfg.displaySkin = 0;
+  cfg.telegramEnabled = true;
   saveConfig();
   Serial.println("[CONFIG] No valid config found — using defaults.");
 }
@@ -218,6 +283,55 @@ int currentStep = 0;
 unsigned long stepStartMillis = 0;
 bool buzzerPinState = false;
 unsigned long lastBuzzMillis = 0;
+bool buzzWasRealTrigger = false; // true only for handleTrigger()/handlePulse() (real sensor relays) — never for handleTest(), so dashboard test beeps don't spam Telegram
+
+// ---------------------------------------------------------------------
+// Telegram integration (added BZ06) — deliberately minimal compared to
+// the Sensor Unit's notify.cpp: no incoming-command polling (no /status
+// command here), just outbound alerts for the handful of events that
+// are genuinely useful to know about from the Buzzer Unit specifically:
+// it started/stopped sounding a REAL alert, and it was paused/resumed
+// from its own dashboard. Test beeps, WiFi reconnects, and e-stop
+// toggles are deliberately NOT sent — kept quiet on purpose, matching
+// the app-wide "declutter notifications" pass this was added alongside.
+// ---------------------------------------------------------------------
+bool isTelegramConfigured() {
+  return strlen(cfg.telegramBotToken) > 0;
+}
+
+void sendTelegramMessage(const String &text) {
+  if (!isTelegramConfigured() || !cfg.telegramEnabled) return;
+
+  String fullText = text + "\n\n📍 " + String(cfg.name) + " (" + String(cfg.id) + ")";
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setBufferSizes(512, 512); // keeps BearSSL's heap footprint small — see the matching comment in the Sensor Unit's notify.cpp for why this matters on an ESP8266
+  client.setTimeout(4000);
+  bool connected = client.connect("api.telegram.org", 443);
+  if (!connected) {
+    client.stop();
+    delay(600);
+    connected = client.connect("api.telegram.org", 443);
+  }
+  if (!connected) {
+    Serial.println("[TELEGRAM] Connect failed (after retry).");
+    return;
+  }
+  String msg = fullText;
+  msg.replace("\n", "%0A");
+  msg.replace(" ", "%20");
+  String url = "/bot" + String(cfg.telegramBotToken) + "/sendMessage?chat_id=" +
+               String(cfg.telegramChatId) + "&text=" + msg;
+  client.print(String("GET ") + url + " HTTP/1.1\r\nHost: api.telegram.org\r\nConnection: close\r\n\r\n");
+  unsigned long t0 = millis();
+  while (client.connected() && millis() - t0 < 5000) {
+    if (client.available()) client.read();
+    yield();
+  }
+  client.stop();
+  Serial.println("[TELEGRAM] Message sent.");
+}
 
 #define MAX_CALLERS 5
 struct CallerEntry { String ip, name, id; long epoch; };
@@ -1377,6 +1491,10 @@ void updateBuzzer() {
   if (now - buzzStartMillis >= buzzDurationMs) {
     buzzActive = false;
     digitalWrite(PIN_BUZZER, LOW);
+    if (buzzWasRealTrigger) {
+      sendTelegramMessage("✅ Buzzer Alert Ended");
+      buzzWasRealTrigger = false;
+    }
     return;
   }
 
@@ -1465,9 +1583,13 @@ void handleTrigger() {
   unsigned long dur = getDurationArg(5000);
   int pattern = getPatternArg(1);
   startPattern(pattern, dur);
+  buzzWasRealTrigger = true;
   Serial.print("[BUZZ] Trigger — pattern "); Serial.print(pattern);
   Serial.print(" for "); Serial.print(dur); Serial.println("ms");
   server.send(200, "text/plain", "OK");
+  int idx = lastTriggerSensorIdx;
+  String from = (idx >= 0) ? sensors[idx].name + " (" + sensors[idx].id + ")" : "an unnamed sensor";
+  sendTelegramMessage("🔊 Buzzer Sounding\n\nTriggered by: " + from);
 }
 
 void handleTest() {
@@ -1475,6 +1597,7 @@ void handleTest() {
   unsigned long dur = getDurationArg(5000);
   int pattern = getPatternArg(1);
   startPattern(pattern, dur);
+  buzzWasRealTrigger = false;
   Serial.println("[BUZZ] Test beep");
   server.send(200, "text/plain", "OK");
 }
@@ -1485,9 +1608,13 @@ void handlePulse() {
   unsigned long dur = getDurationArg(10000);
   int pattern = getPatternArg(2);
   startPattern(pattern, dur);
+  buzzWasRealTrigger = true;
   Serial.print("[BUZZ] Pulse — pattern "); Serial.print(pattern);
   Serial.print(" for "); Serial.print(dur); Serial.println("ms");
   server.send(200, "text/plain", "OK");
+  int idx = lastTriggerSensorIdx;
+  String from = (idx >= 0) ? sensors[idx].name + " (" + sensors[idx].id + ")" : "an unnamed sensor";
+  sendTelegramMessage("🔊 Buzzer Sounding\n\nTriggered by: " + from);
 }
 
 void handleStop() {
@@ -1518,12 +1645,14 @@ void handlePause() {
   cfg.buzzerPaused = true;
   saveConfig();
   server.send(200, "text/plain", "OK");
+  sendTelegramMessage("🔕 Buzzer Paused\n\nThis device will not sound until resumed.");
 }
 void handleResume() {
   if (!checkAuth()) return;
   cfg.buzzerPaused = false;
   saveConfig();
   server.send(200, "text/plain", "OK");
+  sendTelegramMessage("🔔 Buzzer Resumed");
 }
 
 // --- Emergency Stop (5 min, RAM-only, auto-resume) ---
@@ -2261,6 +2390,8 @@ void handleInfo() {
   json += "\"displaySkin\":" + String(cfg.displaySkin) + ",";
   json += "\"displaySkinName\":\"" + String(getSkinName(cfg.displaySkin)) + "\",";
   json += "\"displaySkinCount\":" + String(DISPLAY_SKIN_COUNT) + ",";
+  json += "\"telegramConfigured\":" + String(isTelegramConfigured() ? "true" : "false") + ",";
+  json += "\"telegramEnabled\":" + String(cfg.telegramEnabled ? "true" : "false") + ",";
   json += "\"currentPattern\":" + String(currentPattern) + ",";
   json += "\"lastBuzzSecAgo\":" + String(lastBuzzMillis > 0 ? (long)((millis() - lastBuzzMillis) / 1000) : -1) + ",";
   json += "\"recentCallers\":[";
@@ -2389,6 +2520,53 @@ void handleSkins() {
   }
   json += "],\"current\":" + String(cfg.displaySkin) + "}";
   server.send(200, "application/json", json);
+}
+
+// --- Telegram config endpoints (added BZ06) — same request shape as
+// the Sensor Unit's /settelegram, so the app's existing "push this bot
+// token/chat ID to every selected device" flow works against both
+// device types without any per-type branching.
+void handleSetTelegram() {
+  if (!checkAuth()) return;
+  if (!server.hasArg("token") || !server.hasArg("chatid")) {
+    server.send(400, "text/plain", "Missing fields"); return;
+  }
+  String token = server.arg("token");
+  String chatid = server.arg("chatid");
+  if (token.length() == 0 || token.length() >= sizeof(cfg.telegramBotToken) ||
+      chatid.length() >= sizeof(cfg.telegramChatId)) {
+    server.send(400, "text/plain", "Too long"); return;
+  }
+  token.toCharArray(cfg.telegramBotToken, sizeof(cfg.telegramBotToken));
+  chatid.toCharArray(cfg.telegramChatId, sizeof(cfg.telegramChatId));
+  saveConfig();
+  server.send(200, "text/plain", "OK");
+  sendTelegramMessage("✅ Telegram Bot Configuration Updated\n\nThis message confirms the new token/chat ID works.");
+}
+
+void handleRemoveTelegram() {
+  if (!checkAuth()) return;
+  sendTelegramMessage("🔌 Telegram Bot Disconnected\n\nThis device will no longer send Telegram notifications until reconfigured.");
+  cfg.telegramBotToken[0] = '\0';
+  cfg.telegramChatId[0] = '\0';
+  saveConfig();
+  server.send(200, "text/plain", "OK");
+}
+
+// POST /mute, /unmute — same route names as the Sensor Unit's own
+// Telegram mute endpoints, so the app's existing DeviceApiService
+// calls work against both device types unchanged.
+void handleMuteTelegram() {
+  if (!checkAuth()) return;
+  cfg.telegramEnabled = false;
+  saveConfig();
+  server.send(200, "text/plain", "OK");
+}
+void handleUnmuteTelegram() {
+  if (!checkAuth()) return;
+  cfg.telegramEnabled = true;
+  saveConfig();
+  server.send(200, "text/plain", "OK");
 }
 
 void handleSetWifi() {
@@ -2685,6 +2863,10 @@ void setup() {
   server.on("/removesensor", HTTP_POST, handleRemoveSensor);
   server.on("/pause", HTTP_POST, handlePause);
   server.on("/resume", HTTP_POST, handleResume);
+  server.on("/settelegram", HTTP_POST, handleSetTelegram);
+  server.on("/removetelegram", HTTP_POST, handleRemoveTelegram);
+  server.on("/mute", HTTP_POST, handleMuteTelegram);
+  server.on("/unmute", HTTP_POST, handleUnmuteTelegram);
   server.on("/estop/toggle", HTTP_POST, handleEstopToggle);
   server.on("/oled/on", HTTP_POST, handleOledOn);
   server.on("/oled/off", HTTP_POST, handleOledOff);
