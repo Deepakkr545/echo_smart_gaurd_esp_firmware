@@ -9,6 +9,11 @@
 namespace Notify {
 
 static Settings *gSettings = nullptr;
+static bool gTestModeActive = false;
+
+void setTestMode(bool active) {
+  gTestModeActive = active;
+}
 static bool *gArmed = nullptr;
 static float *gLastDistanceCm = nullptr;
 static bool *gEStopActive = nullptr;
@@ -81,8 +86,11 @@ void sendTextMessage(const String &text, bool ignorePause) {
   // once so every call site gets this automatically, no need to edit
   // every message individually.
   String fullText = text;
+  if (gTestModeActive) {
+    fullText = "🧪 TEST MODE\n\n" + fullText;
+  }
   if (gSettings != nullptr) {
-    fullText += "\n\n📍 " + String(gSettings->deviceName) + " (" + String(gSettings->deviceId) + ")";
+    fullText += "\n\nDevice name: " + String(gSettings->deviceName) + ", ID: " + String(gSettings->deviceId);
   }
 
   unsigned long start = millis();

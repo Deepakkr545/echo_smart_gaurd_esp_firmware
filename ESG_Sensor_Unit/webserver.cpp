@@ -1874,7 +1874,7 @@ static void handleStatus() {
   json += "\"longBuzzerPattern\":" + String(gSettings->longTermBuzzerPattern) + ",";
   json += "\"deviceName\":\"" + String(gSettings->deviceName) + "\",";
   json += "\"deviceId\":\"" + String(gSettings->deviceId) + "\",";
-  json += "\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) + "\",";
+  json += "\"currentMode\":\"" + String(gSettings->currentMode) + "\",";
 
   // --- Multi-buzzer arrays ---
   {
@@ -1940,7 +1940,28 @@ static void handleDisarm() { if (!checkAuth()) return;
   httpServer.send(200,"text/plain","OK");
   if (wasArmed) Notify::sendTextMessage("🔓 System Disarmed");
 }
+// Records which mode the app just applied to this device — purely a
+// label for /status to report back later. The app still makes its own
+// separate arm/nightmode/telegram calls; this endpoint doesn't trigger
+// any of that itself, it just remembers the name so any phone (or the
+// same phone after a reinstall) can find out what mode this device is
+// actually in, instead of guessing from local app storage.
+static void handleSetMode() { if (!checkAuth()) return;
+  if (!httpServer.hasArg("value")) { httpServer.send(400,"text/plain","Missing value"); return; }
+  String value = httpServer.arg("value");
+  if (value.length() == 0 || value.length() >= sizeof(gSettings->currentMode)) {
+    httpServer.send(400,"text/plain","Invalid value"); return;
+  }
+  value.toCharArray(gSettings->currentMode, sizeof(gSettings->currentMode));
+  Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+}
 static void handleTest() { if (!checkAuth()) return; Alarm::testBuzzer(*gSettings); httpServer.send(200,"text/plain","OK"); }
+extern unsigned long identifyUntilMillis;
+static void handleIdentify() { if (!checkAuth()) return;
+  identifyUntilMillis = millis() + 3000;
+  httpServer.send(200,"text/plain","OK");
+}
 static void handleStop() { if (!checkAuth()) return; Alarm::emergencyStop(*gSettings); httpServer.send(200,"text/plain","OK"); }
 static void handleBuzzerOn() { if (!checkAuth()) return; gSettings->buzzerMasterEnabled = true; Storage::save(*gSettings); httpServer.send(200,"text/plain","OK"); }
 static void handleBuzzerOff() { if (!checkAuth()) return; gSettings->buzzerMasterEnabled = false; Storage::save(*gSettings); httpServer.send(200,"text/plain","OK"); }
@@ -2229,6 +2250,16 @@ static void handleUnmute() { if (!checkAuth()) return;
   Notify::sendTextMessage("🔔 Telegram Alerts Resumed\n\nAlerts were paused for " + String(elapsed) +
                            " seconds.\nTelegram notifications are fully active again.");
 }
+static void handleTestModeOn() { if (!checkAuth()) return;
+  Notify::setTestMode(true);
+  httpServer.send(200,"text/plain","OK");
+  Notify::sendTextMessage("🧪 Test Mode Started\n\nWalk in front of the sensor to verify the full chain — every alert while this is on is tagged as a test.");
+}
+static void handleTestModeOff() { if (!checkAuth()) return;
+  Notify::setTestMode(false);
+  httpServer.send(200,"text/plain","OK");
+  Notify::sendTextMessage("✅ Test Mode Ended");
+}
 static void handleEstopToggle() { if (!checkAuth()) return;
   bool activating = !*gEStopActive;
   if (activating) {
@@ -2292,7 +2323,9 @@ void begin(Settings *settingsPtr, bool *armedPtr, bool *armedByNightModePtr, flo
   httpServer.on("/systemsettings", HTTP_GET, handleSystemSettings);
   httpServer.on("/arm", HTTP_POST, handleArm);
   httpServer.on("/disarm", HTTP_POST, handleDisarm);
+  httpServer.on("/setmode", HTTP_POST, handleSetMode);
   httpServer.on("/test", HTTP_POST, handleTest);
+  httpServer.on("/identify", HTTP_POST, handleIdentify);
   httpServer.on("/stop", HTTP_POST, handleStop);
   httpServer.on("/calibrate", HTTP_POST, handleCalibrate);
   httpServer.on("/setwifi", HTTP_POST, handleSetWifi);
@@ -2313,6 +2346,8 @@ void begin(Settings *settingsPtr, bool *armedPtr, bool *armedByNightModePtr, flo
   httpServer.on("/nightmode/on", HTTP_POST, handleNightOn);
   httpServer.on("/nightmode/off", HTTP_POST, handleNightOff);
   httpServer.on("/mute", HTTP_POST, handleMute);
+  httpServer.on("/testmode/on", HTTP_POST, handleTestModeOn);
+  httpServer.on("/testmode/off", HTTP_POST, handleTestModeOff);
   httpServer.on("/unmute", HTTP_POST, handleUnmute);
   httpServer.on("/estop/toggle", HTTP_POST, handleEstopToggle);
   httpServer.on("/oled/on", HTTP_POST, handleOledOn);

@@ -19,6 +19,12 @@ namespace Notify {
   void sendTextMessage(const String &text, bool ignorePause = false);
   void sendIntruderAlert(float distanceCm, uint32_t triggerCount);
 
+  // Test Mode — when active, every outgoing message is prefixed so a
+  // walk-test intrusion looks nothing like a real one, without muting
+  // Telegram entirely (muting would defeat the point of a walk-test:
+  // confirming the full sensor -> buzzer -> Telegram chain works).
+  void setTestMode(bool active);
+
   bool isConfigured();
   uint32_t getTotalSent();
   uint32_t getFailedCount();

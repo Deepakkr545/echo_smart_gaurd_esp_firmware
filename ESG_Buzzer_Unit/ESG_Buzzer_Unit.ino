@@ -37,7 +37,7 @@
 // Persisted config
 // ---------------------------------------------------------------------
 #define BUZZ_EEPROM_SIZE 700
-#define BUZZ_MAGIC "BZ06"
+#define BUZZ_MAGIC "BZ07"
 #define FIRMWARE_VERSION "1.0.0" // Buzzer Unit firmware version — exposed in /info for the app's OTA update-check
 #define MAX_MANUAL_SENSORS 5
 #define BUZZ_NTP_GMT_OFFSET_SEC 19800 // IST +5:30, same as main sensor ESP
@@ -75,9 +75,37 @@ struct BuzzerConfig {
   char telegramBotToken[48]; // added BZ06 — Buzzer Unit's own Telegram integration
   char telegramChatId[16];
   bool telegramEnabled;       // master mute for THIS device's Telegram alerts (independent of buzzerPaused)
+  char currentMode[16];       // added BZ07 — "off"|"home"|"red_alert"|"test", set by the app's /setmode call. Same single-source-of-truth purpose as the Sensor Unit's currentMode field.
   uint16_t checksum;
 };
 BuzzerConfig cfg;
+
+// BuzzerConfig exactly as it existed at BZ06 (before currentMode) —
+// kept so loadConfig() can migrate an existing device's settings
+// forward instead of wiping them.
+struct BuzzerConfigV6 {
+  char magic[4];
+  char name[24];
+  char id[24];
+  char wifiSSID[32];
+  char wifiPassword[64];
+  char dashUsername[20];
+  char dashPassword[24];
+  ManualSensorEntry manualSensors[MAX_MANUAL_SENSORS];
+  bool buzzerPaused;
+  uint32_t sessionStartEpoch;
+  uint32_t lastAliveEpoch;
+  uint32_t historyStart[5];
+  uint32_t historyEnd[5];
+  uint8_t historyCount;
+  uint32_t wifiReconnectLog[5];
+  uint8_t wifiReconnectCount;
+  uint8_t displaySkin;
+  char telegramBotToken[48];
+  char telegramChatId[16];
+  bool telegramEnabled;
+  uint16_t checksum;
+};
 
 // BuzzerConfig exactly as it existed at BZ05 (before Telegram fields) —
 // kept so loadConfig() can migrate an existing device's settings
@@ -140,6 +168,12 @@ static uint16_t computeConfigChecksumV5(const BuzzerConfigV5 &c) {
   for (size_t i = 0; i < offsetof(BuzzerConfigV5, checksum); i++) sum += b[i];
   return sum;
 }
+static uint16_t computeConfigChecksumV6(const BuzzerConfigV6 &c) {
+  const uint8_t *b = (const uint8_t*)&c;
+  uint16_t sum = 0;
+  for (size_t i = 0; i < offsetof(BuzzerConfigV6, checksum); i++) sum += b[i];
+  return sum;
+}
 static uint16_t computeConfigChecksumV4(const BuzzerConfigV4 &c) {
   const uint8_t *b = (const uint8_t*)&c;
   uint16_t sum = 0;
@@ -156,7 +190,39 @@ void loadConfig() {
   EEPROM.begin(BUZZ_EEPROM_SIZE);
   EEPROM.get(0, cfg);
   if (memcmp(cfg.magic, BUZZ_MAGIC, 4) == 0 && cfg.checksum == computeConfigChecksum(cfg)) {
-    Serial.println("[CONFIG] Loaded config from EEPROM (BZ06).");
+    Serial.println("[CONFIG] Loaded config from EEPROM (BZ07).");
+    return;
+  }
+
+  // Current-version load failed — check whether this is actually a
+  // BZ06 device (the version right before currentMode was added)
+  // before assuming the EEPROM is genuinely blank/corrupted.
+  BuzzerConfigV6 v6;
+  EEPROM.get(0, v6);
+  if (memcmp(v6.magic, "BZ06", 4) == 0 && v6.checksum == computeConfigChecksumV6(v6)) {
+    Serial.println("[CONFIG] Migrating BZ06 -> BZ07 (all settings preserved, currentMode defaults to home).");
+    memset(&cfg, 0, sizeof(cfg));
+    memcpy(cfg.name, v6.name, sizeof(cfg.name));
+    memcpy(cfg.id, v6.id, sizeof(cfg.id));
+    memcpy(cfg.wifiSSID, v6.wifiSSID, sizeof(cfg.wifiSSID));
+    memcpy(cfg.wifiPassword, v6.wifiPassword, sizeof(cfg.wifiPassword));
+    memcpy(cfg.dashUsername, v6.dashUsername, sizeof(cfg.dashUsername));
+    memcpy(cfg.dashPassword, v6.dashPassword, sizeof(cfg.dashPassword));
+    memcpy(cfg.manualSensors, v6.manualSensors, sizeof(cfg.manualSensors));
+    cfg.buzzerPaused = v6.buzzerPaused;
+    cfg.sessionStartEpoch = v6.sessionStartEpoch;
+    cfg.lastAliveEpoch = v6.lastAliveEpoch;
+    memcpy(cfg.historyStart, v6.historyStart, sizeof(cfg.historyStart));
+    memcpy(cfg.historyEnd, v6.historyEnd, sizeof(cfg.historyEnd));
+    cfg.historyCount = v6.historyCount;
+    memcpy(cfg.wifiReconnectLog, v6.wifiReconnectLog, sizeof(cfg.wifiReconnectLog));
+    cfg.wifiReconnectCount = v6.wifiReconnectCount;
+    cfg.displaySkin = v6.displaySkin;
+    memcpy(cfg.telegramBotToken, v6.telegramBotToken, sizeof(cfg.telegramBotToken));
+    memcpy(cfg.telegramChatId, v6.telegramChatId, sizeof(cfg.telegramChatId));
+    cfg.telegramEnabled = v6.telegramEnabled;
+    strncpy(cfg.currentMode, "home", sizeof(cfg.currentMode) - 1);
+    saveConfig();
     return;
   }
 
@@ -166,7 +232,7 @@ void loadConfig() {
   BuzzerConfigV5 v5;
   EEPROM.get(0, v5);
   if (memcmp(v5.magic, "BZ05", 4) == 0 && v5.checksum == computeConfigChecksumV5(v5)) {
-    Serial.println("[CONFIG] Migrating BZ05 -> BZ06 (all settings preserved, Telegram starts unconfigured).");
+    Serial.println("[CONFIG] Migrating BZ05 -> BZ07 (all settings preserved, Telegram starts unconfigured, currentMode defaults to home).");
     memset(&cfg, 0, sizeof(cfg));
     memcpy(cfg.name, v5.name, sizeof(cfg.name));
     memcpy(cfg.id, v5.id, sizeof(cfg.id));
@@ -185,6 +251,7 @@ void loadConfig() {
     cfg.wifiReconnectCount = v5.wifiReconnectCount;
     cfg.displaySkin = v5.displaySkin;
     cfg.telegramEnabled = true; // default on, matching Sensor Unit's alarmEnabled default
+    strncpy(cfg.currentMode, "home", sizeof(cfg.currentMode) - 1);
     saveConfig();
     return;
   }
@@ -214,6 +281,7 @@ void loadConfig() {
     cfg.wifiReconnectCount = old.wifiReconnectCount;
     cfg.displaySkin = 0; // Classic — the only genuinely new field
     cfg.telegramEnabled = true;
+    strncpy(cfg.currentMode, "home", sizeof(cfg.currentMode) - 1);
     saveConfig();
     return;
   }
@@ -226,6 +294,7 @@ void loadConfig() {
   strncpy(cfg.id, "Buzzer Unit", sizeof(cfg.id) - 1);
   cfg.displaySkin = 0;
   cfg.telegramEnabled = true;
+  strncpy(cfg.currentMode, "home", sizeof(cfg.currentMode) - 1);
   saveConfig();
   Serial.println("[CONFIG] No valid config found — using defaults.");
 }
@@ -300,10 +369,14 @@ bool isTelegramConfigured() {
   return strlen(cfg.telegramBotToken) > 0;
 }
 
+bool buzzerTestModeActive = false; // RAM-only — see Sensor Unit's notify.cpp for why this exists
+
 void sendTelegramMessage(const String &text) {
   if (!isTelegramConfigured() || !cfg.telegramEnabled) return;
 
-  String fullText = text + "\n\n📍 " + String(cfg.name) + " (" + String(cfg.id) + ")";
+  String fullText = text;
+  if (buzzerTestModeActive) fullText = "🧪 TEST MODE\n\n" + fullText;
+  fullText += "\n\nDevice name: " + String(cfg.name) + ", ID: " + String(cfg.id);
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -1408,9 +1481,24 @@ void drawAlertScreen(unsigned long now) {
   oled.display();
 }
 
+unsigned long identifyUntilMillis = 0; // set by /identify handler; 0 = not identifying
+
 void updateDisplay() {
   if (!oledOn) return;
   unsigned long now = millis();
+
+  if (identifyUntilMillis > 0) {
+    if (now < identifyUntilMillis) {
+      oled.clearDisplay();
+      if ((now / 300) % 2 == 0) {
+        drawCenteredText("IDENTIFY", 20, 2, SSD1306_WHITE);
+        drawCenteredText(cfg.name, 44, 1, SSD1306_WHITE);
+      }
+      oled.display();
+      return;
+    }
+    identifyUntilMillis = 0; // flash window over, resume normal display
+  }
 
   if (buzzActive && !cfg.buzzerPaused && !buzzerEStopActive) {
     dispState = DISP_ALERT;
@@ -2050,19 +2138,9 @@ input::placeholder{color:var(--ink-mute);}
   </div>
 
   <div class="card">
-    <div class="card-title"><svg class="i"><use href="#ic-radio"/></svg>Connected Sensors (Auto) — <span id="sensorCount">0/5</span></div>
+    <div class="card-title"><svg class="i"><use href="#ic-radio"/></svg>Connected Sensors — <span id="sensorCount">0/5</span></div>
     <div id="sensorInfo">--</div>
-  </div>
-
-  <div class="card">
-    <div class="card-title"><svg class="i"><use href="#ic-devices"/></svg>Manually Added Sensors</div>
-    <div id="manualSensorInfo">--</div>
-    <div style="margin-top:12px;">
-      <input id="manIp" placeholder="Sensor IP (e.g. 192.168.1.91)">
-      <input id="manUser" placeholder="Username (optional)">
-      <input id="manPass" placeholder="Password (optional)" type="password">
-      <button class="btn btn-primary btn-block" onclick="addManualSensor()"><svg class="i i-sm" style="color:#fff"><use href="#ic-plus"/></svg> Add Sensor</button>
-    </div>
+    <div style="margin-top:8px;font-size:13px;opacity:0.7;">To connect a sensor to this buzzer, add this buzzer's IP from that sensor's own dashboard (or use the app's Device Connections screen).</div>
   </div>
 
   <div class="card">
@@ -2257,49 +2335,7 @@ const refresh = async () => {
       document.getElementById('dashUserIn').placeholder=d.loginEnabled?'Username (login is ON)':'Username (login is OFF)';
       filled=true;
     }
-
-    refreshManualSensors(d.manualSensors||[]);
   }catch(e){}
-};
-const refreshManualSensors = async (manual) => {
-  if(manual.length===0){ document.getElementById('manualSensorInfo').innerHTML='No manually-added sensors'; return; }
-  let html='';
-  for(const m of manual){
-    let block='';
-    try{
-      const headers={};
-      if(m.username) headers['Authorization']='Basic '+btoa(m.username+':'+(m.password||''));
-      const controller=new AbortController();
-      const t=setTimeout(()=>controller.abort(),3000);
-      const r=await fetch('http://'+m.ip+'/status',{headers,signal:controller.signal});
-      clearTimeout(t);
-      if(r.ok){
-        const d=await r.json();
-        block=sensorRow(d.deviceName||'Unknown',d.deviceId||'',m.ip,d.shortBuzzerPattern,d.shortBuzzerSec,d.longBuzzerPattern,d.longBuzzerSec,d.sustainedThresholdSec);
-      } else {
-        block='<div class="sensor-block"><div class="row"><span>'+m.ip+'</span><span class="v bad">Auth failed / error</span></div></div>';
-      }
-    }catch(err){
-      block='<div class="sensor-block"><div class="row"><span>'+m.ip+'</span><span class="v bad">Unreachable</span></div></div>';
-    }
-    block += '<button class="btn-small btn-danger" onclick="removeManualSensor(\''+m.ip+'\')">Remove</button>';
-    html += block;
-  }
-  document.getElementById('manualSensorInfo').innerHTML = html;
-};
-const addManualSensor = async () => {
-  const ip=document.getElementById('manIp').value;
-  const user=document.getElementById('manUser').value;
-  const pass=document.getElementById('manPass').value;
-  if(!ip){toast('Enter the sensor IP');return;}
-  const r = await fetch('/addsensor',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    body:'ip='+encodeURIComponent(ip)+'&username='+encodeURIComponent(user)+'&password='+encodeURIComponent(pass)});
-  if(r.ok){ toast('Sensor added'); logEvent('➕ Manual sensor added: '+ip); document.getElementById('manIp').value=''; document.getElementById('manUser').value=''; document.getElementById('manPass').value=''; refresh(); }
-  else { toast('Could not add — max 5 total sensors reached'); }
-};
-const removeManualSensor = async (ip) => {
-  await fetch('/removesensor',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'ip='+encodeURIComponent(ip)});
-  toast('Sensor removed'); logEvent('➖ Manual sensor removed: '+ip); refresh();
 };
 const testBuzz = async () => {
   const p=document.getElementById('testPattern').value;
@@ -2385,6 +2421,7 @@ void handleInfo() {
   json += "\"name\":\"" + String(cfg.name) + "\",";
   json += "\"id\":\"" + String(cfg.id) + "\",";
   json += "\"firmwareVersion\":\"" + String(FIRMWARE_VERSION) + "\",";
+  json += "\"currentMode\":\"" + String(cfg.currentMode) + "\",";
   json += "\"buzzActive\":" + String(buzzActive ? "true" : "false") + ",";
   json += "\"buzzerPaused\":" + String(cfg.buzzerPaused ? "true" : "false") + ",";
   json += "\"estopActive\":" + String(buzzerEStopActive ? "true" : "false") + ",";
@@ -2567,6 +2604,34 @@ void handleMuteTelegram() {
 void handleUnmuteTelegram() {
   if (!checkAuth()) return;
   cfg.telegramEnabled = true;
+  saveConfig();
+  server.send(200, "text/plain", "OK");
+}
+void handleTestModeOn() {
+  if (!checkAuth()) return;
+  buzzerTestModeActive = true;
+  server.send(200, "text/plain", "OK");
+}
+void handleTestModeOff() {
+  if (!checkAuth()) return;
+  buzzerTestModeActive = false;
+  server.send(200, "text/plain", "OK");
+}
+void handleIdentify() {
+  if (!checkAuth()) return;
+  identifyUntilMillis = millis() + 3000;
+  server.send(200, "text/plain", "OK");
+}
+// Records which mode the app just applied — same purpose as the Sensor
+// Unit's /setmode, purely a label for /info to report back later.
+void handleSetMode() {
+  if (!checkAuth()) return;
+  if (!server.hasArg("value")) { server.send(400, "text/plain", "Missing value"); return; }
+  String value = server.arg("value");
+  if (value.length() == 0 || value.length() >= sizeof(cfg.currentMode)) {
+    server.send(400, "text/plain", "Invalid value"); return;
+  }
+  value.toCharArray(cfg.currentMode, sizeof(cfg.currentMode));
   saveConfig();
   server.send(200, "text/plain", "OK");
 }
@@ -2868,6 +2933,10 @@ void setup() {
   server.on("/settelegram", HTTP_POST, handleSetTelegram);
   server.on("/removetelegram", HTTP_POST, handleRemoveTelegram);
   server.on("/mute", HTTP_POST, handleMuteTelegram);
+  server.on("/testmode/on", HTTP_POST, handleTestModeOn);
+  server.on("/testmode/off", HTTP_POST, handleTestModeOff);
+  server.on("/setmode", HTTP_POST, handleSetMode);
+  server.on("/identify", HTTP_POST, handleIdentify);
   server.on("/unmute", HTTP_POST, handleUnmuteTelegram);
   server.on("/estop/toggle", HTTP_POST, handleEstopToggle);
   server.on("/oled/on", HTTP_POST, handleOledOn);

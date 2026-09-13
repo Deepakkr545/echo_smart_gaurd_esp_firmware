@@ -110,6 +110,15 @@ struct Settings {
   // never affects sensing/alarm logic.
   uint8_t  displaySkin;
 
+  // --- Current mode (added v11) ---
+  // "off" | "home" | "red_alert" | "test" — set whenever the app
+  // applies a mode via /setmode. This is the SINGLE SOURCE OF TRUTH
+  // for "which mode is this device in" — the app no longer relies on
+  // its own local storage to know this, so a fresh phone install (or
+  // a device that was powered off during a mode change) always
+  // reports its own real current mode rather than the app guessing.
+  char     currentMode[16];
+
   uint16_t checksum;           // Computed over all fields above.
 };
 

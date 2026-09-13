@@ -34,6 +34,7 @@ float lastDistanceCm = -1.0;   // Most recent sensor reading, shared with the da
 bool emergencyStopActive = false;
 unsigned long emergencyStopStartMillis = 0;
 unsigned long muteStartMillis = 0;
+unsigned long identifyUntilMillis = 0; // set by webserver.cpp's /identify handler; 0 = not identifying
 bool sessionMarked = false;             // True once this session's start time is recorded (needs NTP)
 unsigned long lastAliveSaveMillis = 0;  // Throttles periodic diagnostics EEPROM saves
 
@@ -356,6 +357,20 @@ void checkSerialCommands() {
 // person's own network. Once it's in Station mode (connected to a real
 // network), it shows the normal reading screen as before.
 void updateDisplayScreen(bool armedState, bool alarmActive, float distanceCm, bool distanceValid) {
+  if (identifyUntilMillis > 0) {
+    if (millis() < identifyUntilMillis) {
+      // Blink every 300ms — alternating a bold message with a blank
+      // screen reads as an obvious "look at me" flash, not just a
+      // static screen you might mistake for normal content.
+      if ((millis() / 300) % 2 == 0) {
+        Display::showMessage("IDENTIFY", settings.deviceName);
+      } else {
+        Display::showMessage("", "");
+      }
+      return;
+    }
+    identifyUntilMillis = 0; // flash window over, resume normal display
+  }
   if (WiFiManager::getMode() == WiFiManager::MODE_ACCESS_POINT) {
     Display::showApInstructions(WIFI_AP_SSID, WiFiManager::getIPAddress());
     return;

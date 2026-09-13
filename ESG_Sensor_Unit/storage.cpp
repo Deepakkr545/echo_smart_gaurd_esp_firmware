@@ -9,7 +9,7 @@
 #include <EEPROM.h>
 
 #define STORAGE_MAGIC        "SSS1"
-#define STORAGE_VERSION      10
+#define STORAGE_VERSION      11
 #define EEPROM_SIZE          880
 #define EEPROM_START_ADDR    0
 
@@ -139,6 +139,28 @@ struct SettingsV9 {
   uint16_t checksum;
 };
 
+// Settings exactly as it existed before currentMode was added (v10) —
+// identical to V9 plus the single displaySkin byte.
+struct SettingsV10 {
+  char magic[4]; uint8_t version;
+  char wifiSSID[32]; char wifiPassword[64];
+  float triggerDistanceCm; float wallDistanceCm; uint32_t lastCalibrationEpoch;
+  bool alarmEnabled; uint16_t alarmDurationSec; bool autoArm; bool nightMode;
+  int8_t timezoneOffsetHours; uint32_t bootCount;
+  bool armed; bool oledOn;
+  char telegramBotToken[48]; char telegramChatId[16];
+  bool buzzerMasterEnabled; uint16_t longTermBuzzerDurationSec; uint16_t sustainedThresholdSec;
+  char buzzerDeviceIp[16]; char deviceName[32]; char deviceId[24];
+  char dashboardUsername[20]; char dashboardPassword[24];
+  char siblingDevices[220];
+  uint8_t shortTermBuzzerPattern; uint8_t longTermBuzzerPattern;
+  char buzzerIps[5][16];
+  uint32_t sessionStartEpoch; uint32_t lastAliveEpoch;
+  uint32_t historyStart[5]; uint32_t historyEnd[5]; uint8_t historyCount;
+  uint8_t displaySkin;
+  uint16_t checksum;
+};
+
 namespace Storage {
 
 static uint16_t computeChecksum(const uint8_t *bytes, size_t len) {
@@ -156,6 +178,7 @@ static uint16_t checksumOfV6(const SettingsV6 &s) { return computeChecksum((cons
 static uint16_t checksumOfV7(const SettingsV7 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV7, checksum)); }
 static uint16_t checksumOfV8(const SettingsV8 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV8, checksum)); }
 static uint16_t checksumOfV9(const SettingsV9 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV9, checksum)); }
+static uint16_t checksumOfV10(const SettingsV10 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV10, checksum)); }
 
 static Settings defaults() {
   Settings s; memset(&s, 0, sizeof(Settings));
@@ -182,6 +205,7 @@ static Settings defaults() {
   s.lastAliveEpoch = 0;
   s.historyCount = 0;
   s.displaySkin = 0; // Classic Numeric — matches the original always-on layout
+  strncpy(s.currentMode, "home", sizeof(s.currentMode)-1); // matches the app's own first-run suggestion
   s.checksum = checksumOf(s);
   return s;
 }
@@ -198,11 +222,50 @@ Settings load() {
   bool magicOk = (memcmp(s.magic, STORAGE_MAGIC, 4) == 0);
 
   if (magicOk && s.checksum == checksumOf(s)) {
-    Serial.println("[STORAGE] Settings loaded (v10).");
+    Serial.println("[STORAGE] Settings loaded (v11).");
     return s;
   }
 
   if (magicOk) {
+    SettingsV10 v10; EEPROM.get(EEPROM_START_ADDR, v10);
+    if (v10.checksum == checksumOfV10(v10)) {
+      Serial.println("[STORAGE] Migrating v10 -> v11 (all settings preserved, currentMode defaults to home).");
+      Settings m = defaults();
+      memcpy(m.wifiSSID, v10.wifiSSID, sizeof(m.wifiSSID));
+      memcpy(m.wifiPassword, v10.wifiPassword, sizeof(m.wifiPassword));
+      m.triggerDistanceCm = v10.triggerDistanceCm; m.wallDistanceCm = v10.wallDistanceCm;
+      m.lastCalibrationEpoch = v10.lastCalibrationEpoch;
+      m.alarmEnabled = v10.alarmEnabled; m.alarmDurationSec = v10.alarmDurationSec;
+      m.autoArm = v10.autoArm; m.nightMode = v10.nightMode;
+      m.timezoneOffsetHours = v10.timezoneOffsetHours; m.bootCount = v10.bootCount;
+      m.armed = v10.armed; m.oledOn = v10.oledOn;
+      memcpy(m.telegramBotToken, v10.telegramBotToken, sizeof(m.telegramBotToken));
+      memcpy(m.telegramChatId, v10.telegramChatId, sizeof(m.telegramChatId));
+      m.buzzerMasterEnabled = v10.buzzerMasterEnabled;
+      m.longTermBuzzerDurationSec = v10.longTermBuzzerDurationSec;
+      m.sustainedThresholdSec = v10.sustainedThresholdSec;
+      memcpy(m.buzzerDeviceIp, v10.buzzerDeviceIp, sizeof(m.buzzerDeviceIp));
+      memcpy(m.deviceName, v10.deviceName, sizeof(m.deviceName));
+      memcpy(m.deviceId, v10.deviceId, sizeof(m.deviceId));
+      memcpy(m.dashboardUsername, v10.dashboardUsername, sizeof(m.dashboardUsername));
+      memcpy(m.dashboardPassword, v10.dashboardPassword, sizeof(m.dashboardPassword));
+      memcpy(m.siblingDevices, v10.siblingDevices, sizeof(m.siblingDevices));
+      m.shortTermBuzzerPattern = v10.shortTermBuzzerPattern;
+      m.longTermBuzzerPattern = v10.longTermBuzzerPattern;
+      memcpy(m.buzzerIps, v10.buzzerIps, sizeof(m.buzzerIps));
+      m.sessionStartEpoch = v10.sessionStartEpoch;
+      m.lastAliveEpoch = v10.lastAliveEpoch;
+      memcpy(m.historyStart, v10.historyStart, sizeof(m.historyStart));
+      memcpy(m.historyEnd, v10.historyEnd, sizeof(m.historyEnd));
+      m.historyCount = v10.historyCount;
+      m.displaySkin = v10.displaySkin;
+      // currentMode intentionally left at defaults()'s "home" — v10
+      // devices never tracked a mode, so "home" is the safest guess
+      // (matches the app's own suggested default for a device with no
+      // mode history).
+      save(m);
+      return m;
+    }
     SettingsV9 v9; EEPROM.get(EEPROM_START_ADDR, v9);
     if (v9.checksum == checksumOfV9(v9)) {
       Serial.println("[STORAGE] Migrating v9 -> v10 (all settings preserved, displaySkin defaults to Classic).");
