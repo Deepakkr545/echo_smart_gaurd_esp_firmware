@@ -1875,6 +1875,7 @@ static void handleStatus() {
   json += "\"deviceName\":\"" + String(gSettings->deviceName) + "\",";
   json += "\"deviceId\":\"" + String(gSettings->deviceId) + "\",";
   json += "\"currentMode\":\"" + String(gSettings->currentMode) + "\",";
+  json += "\"notifyOtherEnabled\":" + String(gSettings->notifyOtherEnabled ? "true" : "false") + ",";
 
   // --- Multi-buzzer arrays ---
   {
@@ -1932,13 +1933,15 @@ static void handleArm() { if (!checkAuth()) return;
   bool wasArmed = *gArmed;
   *gArmed = true; *gArmedByNightMode = false; gSettings->armed = true; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  if (!wasArmed) Notify::sendTextMessage("🛡️ System Armed");
+  bool silent = httpServer.hasArg("silent"); // set by the app during a mode-change, which sends its own single consolidated message instead
+  if (!wasArmed && !silent) Notify::sendTextMessage("🛡️ System Armed");
 }
 static void handleDisarm() { if (!checkAuth()) return;
   bool wasArmed = *gArmed;
   *gArmed = false; *gArmedByNightMode = false; gSettings->armed = false; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  if (wasArmed) Notify::sendTextMessage("🔓 System Disarmed");
+  bool silent = httpServer.hasArg("silent");
+  if (wasArmed && !silent) Notify::sendTextMessage("🔓 System Disarmed");
 }
 // Records which mode the app just applied to this device — purely a
 // label for /status to report back later. The app still makes its own
@@ -1946,15 +1949,29 @@ static void handleDisarm() { if (!checkAuth()) return;
 // any of that itself, it just remembers the name so any phone (or the
 // same phone after a reinstall) can find out what mode this device is
 // actually in, instead of guessing from local app storage.
+// Master toggle for the "Other Notifications" category (everything
+// except security alerts, which always go through regardless).
+static void handleSetNotifyOther() { if (!checkAuth()) return;
+  if (!httpServer.hasArg("value")) { httpServer.send(400,"text/plain","Missing value"); return; }
+  gSettings->notifyOtherEnabled = httpServer.arg("value") == "1";
+  Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+}
 static void handleSetMode() { if (!checkAuth()) return;
   if (!httpServer.hasArg("value")) { httpServer.send(400,"text/plain","Missing value"); return; }
   String value = httpServer.arg("value");
   if (value.length() == 0 || value.length() >= sizeof(gSettings->currentMode)) {
     httpServer.send(400,"text/plain","Invalid value"); return;
   }
+  bool changed = String(gSettings->currentMode) != value;
   value.toCharArray(gSettings->currentMode, sizeof(gSettings->currentMode));
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
+  if (!changed) return; // re-applying the same mode you're already in, nothing new to report
+  String label = value == "off" ? "Off" : value == "home" ? "Home" :
+                 value == "red_alert" ? "Red Alert" : value == "test" ? "Test" : value;
+  String extra = value == "test" ? "\n\nWalk in front of the sensor to verify the full chain. Every alert while this is on is tagged as a test." : "";
+  Notify::sendTextMessage("🔁 " + label + " Mode Activated" + extra);
 }
 static void handleTest() { if (!checkAuth()) return; Alarm::testBuzzer(*gSettings); httpServer.send(200,"text/plain","OK"); }
 extern unsigned long identifyUntilMillis;
@@ -2219,10 +2236,11 @@ static void handleRemoveTelegram() { if (!checkAuth()) return;
 }
 
 static void handleNightOn() { if (!checkAuth()) return;
-  bool wasOff = !gSettings->nightMode; // edge-detect — Vacation mode may call this repeatedly even when already on
+  bool wasOff = !gSettings->nightMode; // edge-detect, Vacation/Home mode may call this repeatedly even when already on
   gSettings->nightMode = true; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  if (wasOff) {
+  bool silent = httpServer.hasArg("silent");
+  if (wasOff && !silent) {
     Notify::sendTextMessage("🌙 Night Mode Enabled\n\nSystem will auto-arm between 10 PM and 7 AM.");
   }
 }
@@ -2230,35 +2248,62 @@ static void handleNightOff() { if (!checkAuth()) return;
   bool wasOn = gSettings->nightMode;
   gSettings->nightMode = false; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  if (wasOn) {
+  bool silent = httpServer.hasArg("silent");
+  if (wasOn && !silent) {
     Notify::sendTextMessage("🌙 Night Mode Disabled");
   }
 }
+// Formats a duration in seconds as whichever unit reads most naturally
+// (seconds under a minute, minutes under an hour, hours+minutes under
+// a day, otherwise days) — used anywhere a "was off for X" duration
+// gets shown, so it never reads as "10000 seconds".
+static String formatDuration(unsigned long totalSeconds) {
+  if (totalSeconds < 60) return String(totalSeconds) + (totalSeconds == 1 ? " second" : " seconds");
+  unsigned long totalMinutes = totalSeconds / 60;
+  if (totalMinutes < 60) return String(totalMinutes) + (totalMinutes == 1 ? " minute" : " minutes");
+  unsigned long totalHours = totalMinutes / 60;
+  unsigned long remMinutes = totalMinutes % 60;
+  if (totalHours < 24) {
+    String s = String(totalHours) + (totalHours == 1 ? " hour" : " hours");
+    if (remMinutes > 0) s += " " + String(remMinutes) + (remMinutes == 1 ? " minute" : " minutes");
+    return s;
+  }
+  unsigned long totalDays = totalHours / 24;
+  return String(totalDays) + (totalDays == 1 ? " day" : " days");
+}
+
 static void handleMute() { if (!checkAuth()) return;
   gSettings->alarmEnabled = false;
   *gMuteStartMillis = millis();
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
   Notify::sendTextMessage("🔕 Telegram Alerts Paused\n\nPaused since: " + Notify::currentTimeString() +
-                           "\nTelegram notifications are OFF until you resume them manually. The buzzer is unaffected — control it from the buzzer unit's own dashboard.", true);
+                           "\nTelegram notifications are OFF until you resume them manually. The buzzer is unaffected, control it from the buzzer unit's own dashboard.", true);
 }
 static void handleUnmute() { if (!checkAuth()) return;
   unsigned long elapsed = (millis()-*gMuteStartMillis)/1000;
   gSettings->alarmEnabled = true;
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🔔 Telegram Alerts Resumed\n\nAlerts were paused for " + String(elapsed) +
-                           " seconds.\nTelegram notifications are fully active again.");
+  bool silent = httpServer.hasArg("silent");
+  if (!silent) {
+    Notify::sendTextMessage("🔔 Telegram Alerts Resumed\n\nAlerts were paused for " + formatDuration(elapsed) +
+                             ".\nTelegram notifications are fully active again.");
+  }
 }
 static void handleTestModeOn() { if (!checkAuth()) return;
   Notify::setTestMode(true);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("🧪 Test Mode Started\n\nWalk in front of the sensor to verify the full chain — every alert while this is on is tagged as a test.");
+  if (!httpServer.hasArg("silent")) {
+    Notify::sendTextMessage("🧪 Test Mode Started\n\nWalk in front of the sensor to verify the full chain. Every alert while this is on is tagged as a test.");
+  }
 }
 static void handleTestModeOff() { if (!checkAuth()) return;
   Notify::setTestMode(false);
   httpServer.send(200,"text/plain","OK");
-  Notify::sendTextMessage("✅ Test Mode Ended");
+  if (!httpServer.hasArg("silent")) {
+    Notify::sendTextMessage("✅ Test Mode Ended");
+  }
 }
 static void handleEstopToggle() { if (!checkAuth()) return;
   bool activating = !*gEStopActive;
@@ -2324,6 +2369,7 @@ void begin(Settings *settingsPtr, bool *armedPtr, bool *armedByNightModePtr, flo
   httpServer.on("/arm", HTTP_POST, handleArm);
   httpServer.on("/disarm", HTTP_POST, handleDisarm);
   httpServer.on("/setmode", HTTP_POST, handleSetMode);
+  httpServer.on("/setnotifyother", HTTP_POST, handleSetNotifyOther);
   httpServer.on("/test", HTTP_POST, handleTest);
   httpServer.on("/identify", HTTP_POST, handleIdentify);
   httpServer.on("/stop", HTTP_POST, handleStop);

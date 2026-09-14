@@ -1484,11 +1484,11 @@ void drawAlertScreen(unsigned long now) {
 unsigned long identifyUntilMillis = 0; // set by /identify handler; 0 = not identifying
 
 void updateDisplay() {
-  if (!oledOn) return;
   unsigned long now = millis();
 
   if (identifyUntilMillis > 0) {
     if (now < identifyUntilMillis) {
+      oled.ssd1306_command(SSD1306_DISPLAYON); // force the panel on even if the user had it set to off
       oled.clearDisplay();
       if ((now / 300) % 2 == 0) {
         drawCenteredText("IDENTIFY", 20, 2, SSD1306_WHITE);
@@ -1498,7 +1498,10 @@ void updateDisplay() {
       return;
     }
     identifyUntilMillis = 0; // flash window over, resume normal display
+    oled.ssd1306_command(oledOn ? SSD1306_DISPLAYON : SSD1306_DISPLAYOFF); // restore whatever the saved on/off preference actually was
   }
+
+  if (!oledOn) return;
 
   if (buzzActive && !cfg.buzzerPaused && !buzzerEStopActive) {
     dispState = DISP_ALERT;
@@ -1734,14 +1737,18 @@ void handlePause() {
   cfg.buzzerPaused = true;
   saveConfig();
   server.send(200, "text/plain", "OK");
-  sendTelegramMessage("🔕 Buzzer Paused\n\nThis device will not sound until resumed.");
+  if (!server.hasArg("silent")) {
+    sendTelegramMessage("🔕 Buzzer Paused\n\nThis device will not sound until resumed.");
+  }
 }
 void handleResume() {
   if (!checkAuth()) return;
   cfg.buzzerPaused = false;
   saveConfig();
   server.send(200, "text/plain", "OK");
-  sendTelegramMessage("🔔 Buzzer Resumed");
+  if (!server.hasArg("silent")) {
+    sendTelegramMessage("🔔 Buzzer Resumed");
+  }
 }
 
 // --- Emergency Stop (5 min, RAM-only, auto-resume) ---
@@ -2138,7 +2145,7 @@ input::placeholder{color:var(--ink-mute);}
   </div>
 
   <div class="card">
-    <div class="card-title"><svg class="i"><use href="#ic-radio"/></svg>Connected Sensors — <span id="sensorCount">0/5</span></div>
+    <div class="card-title"><svg class="i"><use href="#ic-radio"/></svg>Connected Sensors, <span id="sensorCount">0/5</span></div>
     <div id="sensorInfo">--</div>
     <div style="margin-top:8px;font-size:13px;opacity:0.7;">To connect a sensor to this buzzer, add this buzzer's IP from that sensor's own dashboard (or use the app's Device Connections screen).</div>
   </div>
@@ -2631,9 +2638,14 @@ void handleSetMode() {
   if (value.length() == 0 || value.length() >= sizeof(cfg.currentMode)) {
     server.send(400, "text/plain", "Invalid value"); return;
   }
+  bool changed = String(cfg.currentMode) != value;
   value.toCharArray(cfg.currentMode, sizeof(cfg.currentMode));
   saveConfig();
   server.send(200, "text/plain", "OK");
+  if (!changed) return;
+  String label = value == "off" ? "Off" : value == "home" ? "Home" :
+                 value == "red_alert" ? "Red Alert" : value == "test" ? "Test" : value;
+  sendTelegramMessage("🔁 " + label + " Mode Activated");
 }
 
 void handleSetWifi() {
@@ -2749,7 +2761,7 @@ static void attemptConnect() {
     configTime(BUZZ_NTP_GMT_OFFSET_SEC, 0, "pool.ntp.org", "time.nist.gov");
   } else {
     wifiConnectingMode = true;
-    Serial.println("[WIFI] Not connected yet — will keep retrying in the background (no auto-setup-mode).");
+    Serial.println("[WIFI] Not connected yet, will keep retrying in the background (no auto-setup-mode).");
   }
 }
 
@@ -2836,12 +2848,15 @@ void clearBootCycleCounterIfStable() {
 
 void connectWifi() {
   if (strlen(cfg.wifiSSID) == 0) {
-    // Truly nothing to retry with — legitimate brand-new-device case.
-    Serial.println("[WIFI] No saved WiFi — going to setup mode.");
+    // Truly nothing to retry with, legitimate brand-new-device case.
+    Serial.println("[WIFI] No saved WiFi, going to setup mode.");
     forceApMode();
     return;
   }
   attemptConnect();
+  if (WiFi.status() == WL_CONNECTED) {
+    sendTelegramMessage("✅ A Buzzer device is back online\n\nDashboard: http://" + WiFi.localIP().toString());
+  }
 }
 
 // Call every loop() iteration. Keeps retrying the saved network forever

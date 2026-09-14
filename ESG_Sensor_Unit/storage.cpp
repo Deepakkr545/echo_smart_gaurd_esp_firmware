@@ -9,7 +9,7 @@
 #include <EEPROM.h>
 
 #define STORAGE_MAGIC        "SSS1"
-#define STORAGE_VERSION      11
+#define STORAGE_VERSION      12
 #define EEPROM_SIZE          880
 #define EEPROM_START_ADDR    0
 
@@ -161,6 +161,29 @@ struct SettingsV10 {
   uint16_t checksum;
 };
 
+// Settings exactly as it existed before notifyOtherEnabled was added
+// (v11) — identical to V10 plus the currentMode string.
+struct SettingsV11 {
+  char magic[4]; uint8_t version;
+  char wifiSSID[32]; char wifiPassword[64];
+  float triggerDistanceCm; float wallDistanceCm; uint32_t lastCalibrationEpoch;
+  bool alarmEnabled; uint16_t alarmDurationSec; bool autoArm; bool nightMode;
+  int8_t timezoneOffsetHours; uint32_t bootCount;
+  bool armed; bool oledOn;
+  char telegramBotToken[48]; char telegramChatId[16];
+  bool buzzerMasterEnabled; uint16_t longTermBuzzerDurationSec; uint16_t sustainedThresholdSec;
+  char buzzerDeviceIp[16]; char deviceName[32]; char deviceId[24];
+  char dashboardUsername[20]; char dashboardPassword[24];
+  char siblingDevices[220];
+  uint8_t shortTermBuzzerPattern; uint8_t longTermBuzzerPattern;
+  char buzzerIps[5][16];
+  uint32_t sessionStartEpoch; uint32_t lastAliveEpoch;
+  uint32_t historyStart[5]; uint32_t historyEnd[5]; uint8_t historyCount;
+  uint8_t displaySkin;
+  char currentMode[16];
+  uint16_t checksum;
+};
+
 namespace Storage {
 
 static uint16_t computeChecksum(const uint8_t *bytes, size_t len) {
@@ -179,6 +202,7 @@ static uint16_t checksumOfV7(const SettingsV7 &s) { return computeChecksum((cons
 static uint16_t checksumOfV8(const SettingsV8 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV8, checksum)); }
 static uint16_t checksumOfV9(const SettingsV9 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV9, checksum)); }
 static uint16_t checksumOfV10(const SettingsV10 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV10, checksum)); }
+static uint16_t checksumOfV11(const SettingsV11 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV11, checksum)); }
 
 static Settings defaults() {
   Settings s; memset(&s, 0, sizeof(Settings));
@@ -206,6 +230,7 @@ static Settings defaults() {
   s.historyCount = 0;
   s.displaySkin = 0; // Classic Numeric — matches the original always-on layout
   strncpy(s.currentMode, "home", sizeof(s.currentMode)-1); // matches the app's own first-run suggestion
+  s.notifyOtherEnabled = true; // default on, everything notifies until the user turns it down
   s.checksum = checksumOf(s);
   return s;
 }
@@ -222,11 +247,50 @@ Settings load() {
   bool magicOk = (memcmp(s.magic, STORAGE_MAGIC, 4) == 0);
 
   if (magicOk && s.checksum == checksumOf(s)) {
-    Serial.println("[STORAGE] Settings loaded (v11).");
+    Serial.println("[STORAGE] Settings loaded (v12).");
     return s;
   }
 
   if (magicOk) {
+    SettingsV11 v11; EEPROM.get(EEPROM_START_ADDR, v11);
+    if (v11.checksum == checksumOfV11(v11)) {
+      Serial.println("[STORAGE] Migrating v11 -> v12 (all settings preserved, Other Notifications defaults to on).");
+      Settings m = defaults();
+      memcpy(m.wifiSSID, v11.wifiSSID, sizeof(m.wifiSSID));
+      memcpy(m.wifiPassword, v11.wifiPassword, sizeof(m.wifiPassword));
+      m.triggerDistanceCm = v11.triggerDistanceCm; m.wallDistanceCm = v11.wallDistanceCm;
+      m.lastCalibrationEpoch = v11.lastCalibrationEpoch;
+      m.alarmEnabled = v11.alarmEnabled; m.alarmDurationSec = v11.alarmDurationSec;
+      m.autoArm = v11.autoArm; m.nightMode = v11.nightMode;
+      m.timezoneOffsetHours = v11.timezoneOffsetHours; m.bootCount = v11.bootCount;
+      m.armed = v11.armed; m.oledOn = v11.oledOn;
+      memcpy(m.telegramBotToken, v11.telegramBotToken, sizeof(m.telegramBotToken));
+      memcpy(m.telegramChatId, v11.telegramChatId, sizeof(m.telegramChatId));
+      m.buzzerMasterEnabled = v11.buzzerMasterEnabled;
+      m.longTermBuzzerDurationSec = v11.longTermBuzzerDurationSec;
+      m.sustainedThresholdSec = v11.sustainedThresholdSec;
+      memcpy(m.buzzerDeviceIp, v11.buzzerDeviceIp, sizeof(m.buzzerDeviceIp));
+      memcpy(m.deviceName, v11.deviceName, sizeof(m.deviceName));
+      memcpy(m.deviceId, v11.deviceId, sizeof(m.deviceId));
+      memcpy(m.dashboardUsername, v11.dashboardUsername, sizeof(m.dashboardUsername));
+      memcpy(m.dashboardPassword, v11.dashboardPassword, sizeof(m.dashboardPassword));
+      memcpy(m.siblingDevices, v11.siblingDevices, sizeof(m.siblingDevices));
+      m.shortTermBuzzerPattern = v11.shortTermBuzzerPattern;
+      m.longTermBuzzerPattern = v11.longTermBuzzerPattern;
+      memcpy(m.buzzerIps, v11.buzzerIps, sizeof(m.buzzerIps));
+      m.sessionStartEpoch = v11.sessionStartEpoch;
+      m.lastAliveEpoch = v11.lastAliveEpoch;
+      memcpy(m.historyStart, v11.historyStart, sizeof(m.historyStart));
+      memcpy(m.historyEnd, v11.historyEnd, sizeof(m.historyEnd));
+      m.historyCount = v11.historyCount;
+      m.displaySkin = v11.displaySkin;
+      memcpy(m.currentMode, v11.currentMode, sizeof(m.currentMode));
+      // notifyOtherEnabled intentionally left at defaults()'s "true" —
+      // v11 devices never tracked this, so "on" is the safe default
+      // (matches the pre-existing behavior where everything notified).
+      save(m);
+      return m;
+    }
     SettingsV10 v10; EEPROM.get(EEPROM_START_ADDR, v10);
     if (v10.checksum == checksumOfV10(v10)) {
       Serial.println("[STORAGE] Migrating v10 -> v11 (all settings preserved, currentMode defaults to home).");

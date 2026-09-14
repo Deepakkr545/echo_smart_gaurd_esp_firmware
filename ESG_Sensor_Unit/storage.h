@@ -119,6 +119,13 @@ struct Settings {
   // reports its own real current mode rather than the app guessing.
   char     currentMode[16];
 
+  // --- Notification category toggle (added v12) ---
+  // Security alerts (intrusion, sustained activity, sensor health) are
+  // NEVER gated by this — only everything else (online/offline, mode
+  // changes, system/config events) respects it. Lets a user turn down
+  // routine notification noise without risking missing a real alert.
+  bool     notifyOtherEnabled;
+
   uint16_t checksum;           // Computed over all fields above.
 };
 

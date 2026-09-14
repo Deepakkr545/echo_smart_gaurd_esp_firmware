@@ -205,7 +205,7 @@ void setup() {
   String dashboardUrl = "http://" + WiFiManager::getIPAddress();
   Serial.print("[MAIN] Dashboard available at: ");
   Serial.println(dashboardUrl);
-  Notify::sendTextMessage("✅ Device restarted successfully\n🌐 Echo Smart Gaurd is online.\nDashboard: " + dashboardUrl);
+  Notify::sendTextMessage("✅ A Sensor device is back online\n\nDashboard: " + dashboardUrl);
 
   configTime(NTP_GMT_OFFSET_SEC, 0, "pool.ntp.org", "time.nist.gov");
 
@@ -359,6 +359,7 @@ void checkSerialCommands() {
 void updateDisplayScreen(bool armedState, bool alarmActive, float distanceCm, bool distanceValid) {
   if (identifyUntilMillis > 0) {
     if (millis() < identifyUntilMillis) {
+      Display::setPower(true); // force the panel on even if the user had it set to off, every loop iteration is cheap/idempotent to call
       // Blink every 300ms — alternating a bold message with a blank
       // screen reads as an obvious "look at me" flash, not just a
       // static screen you might mistake for normal content.
@@ -370,6 +371,7 @@ void updateDisplayScreen(bool armedState, bool alarmActive, float distanceCm, bo
       return;
     }
     identifyUntilMillis = 0; // flash window over, resume normal display
+    Display::setPower(settings.oledOn); // restore whatever the saved on/off preference actually was
   }
   if (WiFiManager::getMode() == WiFiManager::MODE_ACCESS_POINT) {
     Display::showApInstructions(WIFI_AP_SSID, WiFiManager::getIPAddress());
@@ -462,12 +464,12 @@ void loop() {
         armed = true;
         armedByNightMode = true;
         Serial.println("[MAIN] Night Mode: auto-arming.");
-        Notify::sendTextMessage("🌙 Night Mode Started\n\nSystem automatically armed for the night.");
+        Notify::sendTextMessage("🌙 Night Mode Started\n\nGood night! The system has armed itself for the night.");
       } else if (!isNight && armedByNightMode) {
         armed = false;
         armedByNightMode = false;
         Serial.println("[MAIN] Night Mode: auto-disarming (was auto-armed by Night Mode).");
-        Notify::sendTextMessage("🌙 Night Mode Ended\n\nSystem automatically disarmed — it was Night Mode that armed it, not a manual action.");
+        Notify::sendTextMessage("🌙 Night Mode Ended\n\nGood morning! The system has disarmed itself for the day.");
       }
     }
   }
@@ -553,13 +555,12 @@ void loop() {
           Alarm::triggerSustained(settings);
           if (settings.alarmEnabled) {
             String note = lowVariance ?
-              "\n(Reading was very stable — likely a static object, not movement.)" : "";
+              "\nThe reading stayed very stable, likely a static object rather than movement." : "";
             Notify::sendTextMessage("🆘 Strong / Sustained Activity Detected\n\n"
-              "Continuous obstruction/movement in the protected zone for " +
-              String(settings.sustainedThresholdSec) + "+ seconds.\n"
-              "📏 Distance: " + String(distanceCm, 1) + " cm" + note + "\n"
-              "🕒 " + Notify::currentTimeString() + "\n\n"
-              "This indicates a high-probability, prolonged presence — please check immediately.");
+              "Continuous movement in the protected zone for " +
+              String(settings.sustainedThresholdSec) + "+ seconds." + note + "\n"
+              "Time: " + Notify::currentTimeString() + "\n\n"
+              "This suggests a prolonged presence, please check as soon as you can.", false, true);
           }
         }
       }
@@ -591,8 +592,8 @@ void loop() {
     if (!frozenAlertSent) {
       frozenAlertSent = true;
       Notify::sendTextMessage("⚠️ Sensor Health Warning\n\nReading has not changed at all for over " +
-        String(SENSOR_FROZEN_THRESHOLD_SEC) + " seconds.\nA real object/environment almost always shows "
-        "tiny variation — this may indicate a stuck sensor. Please check the wiring/mounting if this persists.");
+        String(SENSOR_FROZEN_THRESHOLD_SEC) + " seconds.\nA real object or environment almost always shows "
+        "tiny variation, this may indicate a stuck sensor. Please check the wiring and mounting if this persists.", false, true);
     }
   } else {
     frozenAlertSent = false;

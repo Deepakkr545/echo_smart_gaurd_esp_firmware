@@ -16,7 +16,7 @@ namespace Notify {
 
   String currentTimeString();
   String timeStringPlusSeconds(long secs);
-  void sendTextMessage(const String &text, bool ignorePause = false);
+  void sendTextMessage(const String &text, bool ignorePause = false, bool isSecurityAlert = false);
   void sendIntruderAlert(float distanceCm, uint32_t triggerCount);
 
   // Test Mode — when active, every outgoing message is prefixed so a

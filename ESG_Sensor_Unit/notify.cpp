@@ -72,13 +72,21 @@ bool isConfigured() {
          strlen(gSettings->telegramBotToken) > 0;
 }
 
-void sendTextMessage(const String &text, bool ignorePause) {
+void sendTextMessage(const String &text, bool ignorePause, bool isSecurityAlert) {
   if (!isConfigured()) {
-    Serial.println("[NOTIFY] Telegram not configured — skipping.");
+    Serial.println("[NOTIFY] Telegram not configured, skipping.");
     return;
   }
   if (gSettings != nullptr && !gSettings->alarmEnabled && !ignorePause) {
-    Serial.println("[NOTIFY] Telegram alerts paused — message suppressed.");
+    Serial.println("[NOTIFY] Telegram alerts paused, message suppressed.");
+    return;
+  }
+  // Security alerts (intrusion, sustained activity, sensor health) are
+  // never gated by the "Other Notifications" master toggle below,
+  // only the alarmEnabled pause above can silence them, that's the
+  // one thing this toggle deliberately doesn't touch.
+  if (!isSecurityAlert && gSettings != nullptr && !gSettings->notifyOtherEnabled) {
+    Serial.println("[NOTIFY] Other Notifications disabled, non-alert message suppressed.");
     return;
   }
 
@@ -134,17 +142,15 @@ void sendTextMessage(const String &text, bool ignorePause) {
 }
 
 void sendIntruderAlert(float distanceCm, uint32_t triggerCount) {
+  (void)distanceCm; // no longer shown in the message, kept in the signature so the call site doesn't need updating
   lastAlertMillis = millis();
   time_t t = time(nullptr);
   if (t > 100000) lastAlertEpoch = (uint32_t)t;
-  String msg = "🚨 Echo Smart Gaurd\n";
-  msg += "⚠️ Possible intruder detected.\n\n";
-  msg += "📍 Location: Protected Stair Area\n";
-  msg += "📏 Distance: " + String(distanceCm, 1) + " cm\n";
-  msg += "🆔 Event ID: #" + String(triggerCount) + "\n";
-  msg += "🕒 Time: " + currentTimeString() + "\n\n";
-  msg += "Please inspect the protected area.";
-  sendTextMessage(msg);
+  String msg = "🚨 Possible Intruder Detected\n\n";
+  msg += "Event ID: #" + String(triggerCount) + "\n";
+  msg += "Time: " + currentTimeString() + "\n\n";
+  msg += "Please check the protected area.";
+  sendTextMessage(msg, false, true);
 }
 
 static void sendFullStatusReport() {
