@@ -27,6 +27,9 @@ bool nightModeFailsafeGuess = false; // true when armedByNightMode was set by th
                                 // apart "user manually armed" from "Night Mode auto-armed", so
                                 // Night Mode only ever undoes its OWN action, never a manual one.
 int consecutiveInZone = 0; // Requires INTRUSION_CONFIRM_READINGS in a row before firing (false-positive fix)
+unsigned long entryGraceUntilMillis = 0; // 0 = no pending entry-delay countdown; disarming while this is set cancels the pending alarm
+unsigned long exitGraceUntilMillis = 0; // 0 = not in an exit-delay window; armed=true already but intrusion checks are held off until this passes
+bool exitGraceConfirmPending = false; // true = still owe the "System Armed" confirmation once the exit window actually closes
 unsigned long zoneStartMillis = 0; // When continuous in-zone presence began (0 = not currently in zone)
 bool sustainedFired = false;       // Ensures the sustained alert fires only once per continuous presence
 float sustainedMin = 99999, sustainedMax = -1; // Track reading variance during the current window (informational only)
@@ -524,19 +527,56 @@ void loop() {
     Serial.println();
 
     // --- Debounced intrusion detection (false-positive fix) ---
-    // Requires INTRUSION_CONFIRM_READINGS consecutive in-zone readings
-    // before firing — a single glitchy reading can no longer trigger
-    // the alarm, while a real crossing (multiple readings ~150-200ms
-    // apart) still fires within ~300-400ms.
+    // How many consecutive in-zone readings are required before this
+    // counts as a real crossing depends on sensitivityProfile: Normal
+    // matches the original fixed 2-reading behavior; Pet-Friendly
+    // requires a longer hold (a pet passing through won't sustain in
+    // the beam as long as a person walking up to it); High fires on
+    // the very first reading.
+    int requiredConfirms = (settings.sensitivityProfile == 0) ? 5 :  // Pet-Friendly
+                            (settings.sensitivityProfile == 2) ? 1 :  // High
+                            INTRUSION_CONFIRM_READINGS;               // Normal (2)
     if (inZone) consecutiveInZone++; else consecutiveInZone = 0;
 
-    if (calibrated && armed && !emergencyStopActive &&
-        consecutiveInZone == INTRUSION_CONFIRM_READINGS) {
-      Alarm::trigger(settings);
-      Stats::recordIntrusion();
-      if (settings.alarmEnabled) {
-        Notify::sendIntruderAlert(distanceCm, Alarm::getTriggerCount());
-        Stats::recordAlertSent();
+    if (calibrated && armed && !emergencyStopActive && millis() >= exitGraceUntilMillis &&
+        consecutiveInZone == requiredConfirms && entryGraceUntilMillis == 0) {
+      if (settings.entryDelaySec > 0) {
+        // Hold off actually sounding the alarm — gives a real occupant
+        // time to disarm on the way in. If still armed once this
+        // window closes, the check further below fires for real.
+        entryGraceUntilMillis = millis() + (unsigned long)settings.entryDelaySec * 1000UL;
+        Serial.println("[ALARM] Intrusion confirmed — entry delay grace period started.");
+      } else {
+        Alarm::trigger(settings);
+        Stats::recordIntrusion();
+        if (settings.alarmEnabled) {
+          Notify::sendIntruderAlert(distanceCm, Alarm::getTriggerCount());
+          Stats::recordAlertSent();
+        }
+      }
+    }
+    // Entry-delay grace period expiring — fire for real if still armed
+    // (a disarm during the grace window already reset this to 0 in the
+    // disarm handler, so reaching here means nobody disarmed in time).
+    if (entryGraceUntilMillis > 0 && millis() >= entryGraceUntilMillis) {
+      entryGraceUntilMillis = 0;
+      if (armed && !emergencyStopActive) {
+        Alarm::trigger(settings);
+        Stats::recordIntrusion();
+        if (settings.alarmEnabled) {
+          Notify::sendIntruderAlert(distanceCm, Alarm::getTriggerCount());
+          Stats::recordAlertSent();
+        }
+      }
+    }
+    // Exit-delay window closing — the sensor genuinely starts watching
+    // as of this moment, so this is when "System Armed" actually means
+    // it, not back when the button was first tapped.
+    if (exitGraceUntilMillis > 0 && millis() >= exitGraceUntilMillis) {
+      exitGraceUntilMillis = 0;
+      if (exitGraceConfirmPending) {
+        exitGraceConfirmPending = false;
+        Notify::sendTextMessage("🛡️ System Armed\n\nThe sensor is now watching.");
       }
     }
 

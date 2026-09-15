@@ -141,6 +141,26 @@ struct Settings {
   char     telegramChatId2[16];
   char     telegramChatId3[16];
 
+  // --- Entry/Exit delay (added v15) ---
+  // Exit delay: seconds of grace after arming before the sensor
+  // actually starts watching, so you can leave without tripping your
+  // own alarm. Entry delay: seconds of grace after the FIRST movement
+  // is detected while armed, before the alarm actually sounds, so you
+  // can disarm on the way in. 0 = instant (old behavior) for either.
+  uint16_t exitDelaySec;
+  uint16_t entryDelaySec;
+
+  // --- Sensitivity profile (added v15) ---
+  // 0 = Pet-Friendly (requires more consecutive in-zone readings
+  //     before firing, since a pet passing through won't hold in the
+  //     beam as long as a person walking up to it), 1 = Normal
+  //     (matches the original fixed behavior), 2 = High (fires on the
+  //     very first reading, most responsive but most false-positive-
+  //     prone). Ultrasonic sensors can't tell size/species the way a
+  //     PIR sensor can, so this works by requiring more SUSTAINED
+  //     presence rather than filtering by size.
+  uint8_t  sensitivityProfile;
+
   uint16_t checksum;           // Computed over all fields above.
 };
 

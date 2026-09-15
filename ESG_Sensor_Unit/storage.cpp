@@ -9,7 +9,7 @@
 #include <EEPROM.h>
 
 #define STORAGE_MAGIC        "SSS1"
-#define STORAGE_VERSION      14
+#define STORAGE_VERSION      15
 #define EEPROM_SIZE          880
 #define EEPROM_START_ADDR    0
 
@@ -234,6 +234,35 @@ struct SettingsV13 {
   uint16_t checksum;
 };
 
+// Settings exactly as it existed before exitDelaySec/entryDelaySec/
+// sensitivityProfile were added (v14) — identical to V13 plus
+// telegramChatId2/telegramChatId3.
+struct SettingsV14 {
+  char magic[4]; uint8_t version;
+  char wifiSSID[32]; char wifiPassword[64];
+  float triggerDistanceCm; float wallDistanceCm; uint32_t lastCalibrationEpoch;
+  bool alarmEnabled; uint16_t alarmDurationSec; bool autoArm; bool nightMode;
+  int8_t timezoneOffsetHours; uint32_t bootCount;
+  bool armed; bool oledOn;
+  char telegramBotToken[48]; char telegramChatId[16];
+  bool buzzerMasterEnabled; uint16_t longTermBuzzerDurationSec; uint16_t sustainedThresholdSec;
+  char buzzerDeviceIp[16]; char deviceName[32]; char deviceId[24];
+  char dashboardUsername[20]; char dashboardPassword[24];
+  char siblingDevices[220];
+  uint8_t shortTermBuzzerPattern; uint8_t longTermBuzzerPattern;
+  char buzzerIps[5][16];
+  uint32_t sessionStartEpoch; uint32_t lastAliveEpoch;
+  uint32_t historyStart[5]; uint32_t historyEnd[5]; uint8_t historyCount;
+  uint8_t displaySkin;
+  char currentMode[16];
+  bool notifyOtherEnabled;
+  uint8_t nightStartHour;
+  uint8_t nightEndHour;
+  char telegramChatId2[16];
+  char telegramChatId3[16];
+  uint16_t checksum;
+};
+
 namespace Storage {
 
 static uint16_t computeChecksum(const uint8_t *bytes, size_t len) {
@@ -255,6 +284,7 @@ static uint16_t checksumOfV10(const SettingsV10 &s) { return computeChecksum((co
 static uint16_t checksumOfV11(const SettingsV11 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV11, checksum)); }
 static uint16_t checksumOfV12(const SettingsV12 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV12, checksum)); }
 static uint16_t checksumOfV13(const SettingsV13 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV13, checksum)); }
+static uint16_t checksumOfV14(const SettingsV14 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV14, checksum)); }
 
 static Settings defaults() {
   Settings s; memset(&s, 0, sizeof(Settings));
@@ -285,6 +315,9 @@ static Settings defaults() {
   s.notifyOtherEnabled = true; // default on, everything notifies until the user turns it down
   s.nightStartHour = 22; // matches the old hardcoded NIGHT_START_HOUR (10 PM)
   s.nightEndHour = 7;    // matches the old hardcoded NIGHT_END_HOUR (7 AM)
+  s.exitDelaySec = 30;   // standard 30s to leave before it actually starts watching
+  s.entryDelaySec = 15;  // standard 15s grace on the way back in before the alarm actually sounds
+  s.sensitivityProfile = 1; // Normal — matches the original fixed 2-reading confirm behavior
   s.checksum = checksumOf(s);
   return s;
 }
@@ -301,11 +334,60 @@ Settings load() {
   bool magicOk = (memcmp(s.magic, STORAGE_MAGIC, 4) == 0);
 
   if (magicOk && s.checksum == checksumOf(s)) {
-    Serial.println("[STORAGE] Settings loaded (v14).");
+    Serial.println("[STORAGE] Settings loaded (v15).");
     return s;
   }
 
   if (magicOk) {
+    SettingsV14 v14; EEPROM.get(EEPROM_START_ADDR, v14);
+    if (v14.checksum == checksumOfV14(v14)) {
+      Serial.println("[STORAGE] Migrating v14 -> v15 (all settings preserved, entry/exit delay stays instant/0 to match this device's existing behavior).");
+      Settings m = defaults();
+      memcpy(m.wifiSSID, v14.wifiSSID, sizeof(m.wifiSSID));
+      memcpy(m.wifiPassword, v14.wifiPassword, sizeof(m.wifiPassword));
+      m.triggerDistanceCm = v14.triggerDistanceCm; m.wallDistanceCm = v14.wallDistanceCm;
+      m.lastCalibrationEpoch = v14.lastCalibrationEpoch;
+      m.alarmEnabled = v14.alarmEnabled; m.alarmDurationSec = v14.alarmDurationSec;
+      m.autoArm = v14.autoArm; m.nightMode = v14.nightMode;
+      m.timezoneOffsetHours = v14.timezoneOffsetHours; m.bootCount = v14.bootCount;
+      m.armed = v14.armed; m.oledOn = v14.oledOn;
+      memcpy(m.telegramBotToken, v14.telegramBotToken, sizeof(m.telegramBotToken));
+      memcpy(m.telegramChatId, v14.telegramChatId, sizeof(m.telegramChatId));
+      m.buzzerMasterEnabled = v14.buzzerMasterEnabled;
+      m.longTermBuzzerDurationSec = v14.longTermBuzzerDurationSec;
+      m.sustainedThresholdSec = v14.sustainedThresholdSec;
+      memcpy(m.buzzerDeviceIp, v14.buzzerDeviceIp, sizeof(m.buzzerDeviceIp));
+      memcpy(m.deviceName, v14.deviceName, sizeof(m.deviceName));
+      memcpy(m.deviceId, v14.deviceId, sizeof(m.deviceId));
+      memcpy(m.dashboardUsername, v14.dashboardUsername, sizeof(m.dashboardUsername));
+      memcpy(m.dashboardPassword, v14.dashboardPassword, sizeof(m.dashboardPassword));
+      memcpy(m.siblingDevices, v14.siblingDevices, sizeof(m.siblingDevices));
+      m.shortTermBuzzerPattern = v14.shortTermBuzzerPattern;
+      m.longTermBuzzerPattern = v14.longTermBuzzerPattern;
+      memcpy(m.buzzerIps, v14.buzzerIps, sizeof(m.buzzerIps));
+      m.sessionStartEpoch = v14.sessionStartEpoch;
+      m.lastAliveEpoch = v14.lastAliveEpoch;
+      memcpy(m.historyStart, v14.historyStart, sizeof(m.historyStart));
+      memcpy(m.historyEnd, v14.historyEnd, sizeof(m.historyEnd));
+      m.historyCount = v14.historyCount;
+      m.displaySkin = v14.displaySkin;
+      memcpy(m.currentMode, v14.currentMode, sizeof(m.currentMode));
+      m.notifyOtherEnabled = v14.notifyOtherEnabled;
+      m.nightStartHour = v14.nightStartHour;
+      m.nightEndHour = v14.nightEndHour;
+      memcpy(m.telegramChatId2, v14.telegramChatId2, sizeof(m.telegramChatId2));
+      memcpy(m.telegramChatId3, v14.telegramChatId3, sizeof(m.telegramChatId3));
+      // Deliberately NOT inheriting defaults()'s 30/15 exit/entry delay
+      // here — this device was already running with instant arm/trigger,
+      // and silently adding a 30s unprotected window would be a real
+      // (if temporary) security reduction the owner never opted into.
+      // sensitivityProfile=1 (Normal) from defaults() is safe to keep
+      // as-is, it exactly matches the old fixed 2-reading-confirm logic.
+      m.exitDelaySec = 0;
+      m.entryDelaySec = 0;
+      save(m);
+      return m;
+    }
     SettingsV13 v13; EEPROM.get(EEPROM_START_ADDR, v13);
     if (v13.checksum == checksumOfV13(v13)) {
       Serial.println("[STORAGE] Migrating v13 -> v14 (all settings preserved, no extra Telegram recipients yet).");

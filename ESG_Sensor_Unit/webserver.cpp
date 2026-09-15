@@ -1880,6 +1880,9 @@ static void handleStatus() {
   json += "\"nightEndHour\":" + String(gSettings->nightEndHour) + ",";
   json += "\"telegramChatId2\":\"" + String(gSettings->telegramChatId2) + "\",";
   json += "\"telegramChatId3\":\"" + String(gSettings->telegramChatId3) + "\",";
+  json += "\"exitDelaySec\":" + String(gSettings->exitDelaySec) + ",";
+  json += "\"entryDelaySec\":" + String(gSettings->entryDelaySec) + ",";
+  json += "\"sensitivityProfile\":" + String(gSettings->sensitivityProfile) + ",";
 
   // --- Multi-buzzer arrays ---
   {
@@ -1933,18 +1936,38 @@ static void handleStatus() {
   httpServer.send(200, "application/json", json);
 }
 
+extern unsigned long entryGraceUntilMillis;
+extern unsigned long exitGraceUntilMillis;
+extern bool exitGraceConfirmPending;
 static void handleArm() { if (!checkAuth()) return;
   bool wasArmed = *gArmed;
   *gArmed = true; *gArmedByNightMode = false; gSettings->armed = true; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
   bool silent = httpServer.hasArg("silent"); // set by the app during a mode-change, which sends its own single consolidated message instead
-  if (!wasArmed && !silent) Notify::sendTextMessage("🛡️ System Armed");
+  if (!wasArmed) {
+    if (gSettings->exitDelaySec > 0) {
+      exitGraceUntilMillis = millis() + (unsigned long)gSettings->exitDelaySec * 1000UL;
+      exitGraceConfirmPending = !silent; // only owe a confirmation later if this arm wasn't itself silent
+      if (!silent) {
+        Notify::sendTextMessage("🚪 Arming in " + String(gSettings->exitDelaySec) + " seconds\n\nLeave now if you're heading out. The sensor won't watch until this window closes.");
+      }
+    } else if (!silent) {
+      Notify::sendTextMessage("🛡️ System Armed");
+    }
+  }
 }
 static void handleDisarm() { if (!checkAuth()) return;
   bool wasArmed = *gArmed;
   *gArmed = false; *gArmedByNightMode = false; gSettings->armed = false; Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
   bool silent = httpServer.hasArg("silent");
+  // Cancel any pending exit-delay window or entry-delay grace period —
+  // disarming should always immediately stand everything down, not
+  // leave a countdown quietly running toward an alarm that no longer
+  // makes sense.
+  exitGraceUntilMillis = 0;
+  exitGraceConfirmPending = false;
+  entryGraceUntilMillis = 0;
   if (wasArmed && !silent) Notify::sendTextMessage("🔓 System Disarmed");
 }
 // Records which mode the app just applied to this device — purely a
@@ -2267,6 +2290,30 @@ static void handleRemoveTelegram() { if (!checkAuth()) return;
 // /settelegram above, as part of bot setup). Either arg can be sent
 // empty to clear that slot, letting a household add or remove phones
 // without needing to redo the whole bot-token/primary-chat-id setup.
+// Sets the exit/entry delay windows (seconds, 0 = instant/off).
+static void handleSetDelays() { if (!checkAuth()) return;
+  if (!httpServer.hasArg("exit") || !httpServer.hasArg("entry")) {
+    httpServer.send(400,"text/plain","Missing exit/entry"); return;
+  }
+  int exitSec = httpServer.arg("exit").toInt();
+  int entrySec = httpServer.arg("entry").toInt();
+  if (exitSec < 0 || exitSec > 300 || entrySec < 0 || entrySec > 300) {
+    httpServer.send(400,"text/plain","Must be 0-300 seconds"); return;
+  }
+  gSettings->exitDelaySec = (uint16_t)exitSec;
+  gSettings->entryDelaySec = (uint16_t)entrySec;
+  Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+}
+// Sets the sensitivity profile: 0=Pet-Friendly, 1=Normal, 2=High.
+static void handleSetSensitivity() { if (!checkAuth()) return;
+  if (!httpServer.hasArg("value")) { httpServer.send(400,"text/plain","Missing value"); return; }
+  int value = httpServer.arg("value").toInt();
+  if (value < 0 || value > 2) { httpServer.send(400,"text/plain","Must be 0, 1, or 2"); return; }
+  gSettings->sensitivityProfile = (uint8_t)value;
+  Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+}
 static void handleSetExtraRecipients() { if (!checkAuth()) return;
   String chatid2 = httpServer.hasArg("chatid2") ? httpServer.arg("chatid2") : String(gSettings->telegramChatId2);
   String chatid3 = httpServer.hasArg("chatid3") ? httpServer.arg("chatid3") : String(gSettings->telegramChatId3);
@@ -2425,6 +2472,8 @@ void begin(Settings *settingsPtr, bool *armedPtr, bool *armedByNightModePtr, flo
   httpServer.on("/settelegram", HTTP_POST, handleSetTelegram);
   httpServer.on("/removetelegram", HTTP_POST, handleRemoveTelegram);
   httpServer.on("/setextrarecipients", HTTP_POST, handleSetExtraRecipients);
+  httpServer.on("/setdelays", HTTP_POST, handleSetDelays);
+  httpServer.on("/setsensitivity", HTTP_POST, handleSetSensitivity);
   httpServer.on("/settrigger", HTTP_POST, handleSetTrigger);
   httpServer.on("/setskin", HTTP_POST, handleSetSkin);
   httpServer.on("/skins", HTTP_GET, handleSkins);
