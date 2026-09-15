@@ -126,6 +126,36 @@ static const char* SKIN_NAMES[DISPLAY_SKIN_COUNT] = {
   "Star Field",
   "Hourglass Timer",
   "Constellation",
+  "Breathing Circle",
+  "Ink Ripple",
+  "Moon Phases",
+  "Aurora Waves",
+  "Cassette Reels",
+  "Tuning Dial",
+  "Holo Grid",
+  "Orbital Rings Pro",
+  "Celestial Drift",
+  "Night Guardian",
+  "Floating Particles",
+  "Growing Tree",
+  "Falling Leaves",
+  "VHS Static",
+  "Pixel Arcade",
+  "Data Stream",
+  "Sleepy Cat",
+  "Robot Buddy",
+  "Swiss Grid",
+  "Orbiting Planets",
+  "Soft Pulse Dot",
+  "Raindrop Ripples",
+  "Dot Matrix Print",
+  "Cyberpunk Terminal",
+  "Watchdog",
+  "Minimalist Gauge",
+  "Corporate Ticker",
+  "Blueprint",
+  "Zen Garden",
+  "Polar Aurora",
 };
 
 static uint8_t currentSkin = 0;
@@ -1111,6 +1141,784 @@ static void skinDrawConstellation(bool armed, bool alarmActive, float distanceCm
   drawCenteredText(badge, 56, 1, SSD1306_WHITE);
 }
 
+// =====================================================================
+// PREMIUM PACK — pure ambient art. No text, no state badges, nothing
+// tied to armed/alarm/wifi/etc — these are meant to just look good
+// sitting on a shelf. State changes (armed/alarm) already have their
+// own dedicated feedback (screen flash, buzzer, Telegram), so these
+// skins deliberately don't duplicate that here.
+// =====================================================================
+
+// Premium 1 — Breathing Circle. A single ring that slowly grows and
+// shrinks like a breath, ~4 second cycle. About as calm as this
+// display can get.
+static void skinDrawBreathingCircle(bool armed, bool alarmActive, float distanceCm,
+                                     bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                     const String &deviceName, float triggerDistanceCm,
+                                     bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 32;
+  float phase = (millis() % 4000) / 4000.0f;
+  float breath = (sin(phase * 2 * PI) + 1.0f) / 2.0f; // 0..1
+  int r = 10 + (int)(breath * 16);
+  oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  oled.drawCircle(cx, cy, r > 2 ? r - 3 : 0, SSD1306_WHITE);
+}
+
+// Premium 2 — Ink Ripple. Concentric rings continuously born at the
+// center and expand outward until they fade past the edge, staggered
+// so 3 are always mid-flight, like drops landing in still water.
+static void skinDrawInkRipple(bool armed, bool alarmActive, float distanceCm,
+                               bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                               const String &deviceName, float triggerDistanceCm,
+                               bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 32, maxR = 34;
+  const unsigned long cycleMs = 3000;
+  for (int i = 0; i < 3; i++) {
+    unsigned long offset = (cycleMs / 3) * i;
+    float phase = ((millis() + offset) % cycleMs) / (float)cycleMs;
+    int r = (int)(phase * maxR);
+    if (r > 1) oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  }
+}
+
+// Premium 3 — Moon Phases. A moon disc where a shadow terminator
+// slides slowly across it on a long, unhurried cycle, waxing and
+// waning like a real lunar month, just sped up to something you'd
+// actually see happen while glancing at it over time.
+static void skinDrawMoonPhases(bool armed, bool alarmActive, float distanceCm,
+                                bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                const String &deviceName, float triggerDistanceCm,
+                                bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 32, r = 20;
+  const unsigned long cycleMs = 24000; // a full "month" every 24s
+  float phase = (millis() % cycleMs) / (float)cycleMs; // 0..1
+  oled.fillCircle(cx, cy, r, SSD1306_WHITE);
+  // Shadow is an ellipse sliding across the disc, width tracks phase.
+  float shadowX = cos(phase * 2 * PI); // -1..1
+  int shadowW = (int)(r * 2 * fabs(shadowX));
+  if (phase < 0.5f) {
+    // Waxing to waning through full — shadow eats from one side.
+    oled.fillRect(shadowX < 0 ? cx - r : cx, cy - r, shadowW, r * 2, SSD1306_BLACK);
+  } else {
+    oled.fillRect(shadowX < 0 ? cx - r : cx, cy - r, shadowW, r * 2, SSD1306_BLACK);
+  }
+}
+
+// Premium 4 — Aurora Waves. Three overlapping horizontal sine-waves
+// drifting sideways at different speeds and amplitudes near the top
+// third of the screen, like curtains of light.
+static void skinDrawAuroraWaves(bool armed, bool alarmActive, float distanceCm,
+                                 bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                 const String &deviceName, float triggerDistanceCm,
+                                 bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const float layers[3][3] = {
+    {18.0f, 6.0f, 40.0f},  // baseY, amplitude, speedDivisor
+    {32.0f, 9.0f, 65.0f},
+    {46.0f, 5.0f, 90.0f},
+  };
+  for (int layer = 0; layer < 3; layer++) {
+    float baseY = layers[layer][0], amp = layers[layer][1], speed = layers[layer][2];
+    int prevX = 0, prevY = (int)baseY;
+    for (int x = 0; x <= 128; x += 3) {
+      float t = (x / speed) + (millis() / (speed * 30.0f));
+      int y = (int)(baseY + sin(t) * amp);
+      if (x > 0) oled.drawLine(prevX, prevY, x, y, SSD1306_WHITE);
+      prevX = x; prevY = y;
+    }
+  }
+}
+
+// Premium 5 — Cassette Reels. Two spoked wheels side by side, each
+// slowly rotating, with a "tape" line connecting them, like watching
+// a cassette play through the little viewing window.
+static void skinDrawCassetteReels(bool armed, bool alarmActive, float distanceCm,
+                                   bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                   const String &deviceName, float triggerDistanceCm,
+                                   bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cy = 32, r = 16, leftX = 34, rightX = 94;
+  float angle = (millis() / 800.0f);
+  oled.drawLine(leftX + r - 2, cy, rightX - r + 2, cy, SSD1306_WHITE);
+  int centers[2] = {leftX, rightX};
+  for (int w = 0; w < 2; w++) {
+    int cx = centers[w];
+    oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+    oled.drawCircle(cx, cy, 4, SSD1306_WHITE);
+    for (int i = 0; i < 5; i++) {
+      float a = angle + (i * 2 * PI / 5);
+      oled.drawLine(cx, cy, cx + (int)(cos(a) * (r - 2)), cy + (int)(sin(a) * (r - 2)), SSD1306_WHITE);
+    }
+  }
+}
+
+// Premium 6 — Analog Tuning Dial. A radio-style arc scale with a
+// needle that sweeps slowly back and forth, like someone endlessly,
+// unhurriedly searching the dial.
+static void skinDrawTuningDial(bool armed, bool alarmActive, float distanceCm,
+                                bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                const String &deviceName, float triggerDistanceCm,
+                                bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 50, r = 40;
+  const float startDeg = 200, sweepDeg = 140;
+  for (int i = 0; i <= 14; i++) {
+    float a = (startDeg + sweepDeg * i / 14.0f) * PI / 180.0f;
+    int len = (i % 2 == 0) ? 7 : 4;
+    oled.drawLine(cx + (int)(cos(a) * r), cy + (int)(sin(a) * r),
+                  cx + (int)(cos(a) * (r - len)), cy + (int)(sin(a) * (r - len)), SSD1306_WHITE);
+  }
+  float phase = (sin(millis() / 2200.0f) + 1.0f) / 2.0f; // 0..1, slow back-and-forth
+  float needleA = (startDeg + sweepDeg * phase) * PI / 180.0f;
+  oled.drawLine(cx, cy, cx + (int)(cos(needleA) * (r - 5)), cy + (int)(sin(needleA) * (r - 5)), SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+}
+
+// Premium 7 — Holographic Grid. A perspective floor-grid that scrolls
+// steadily "toward" the viewer, sci-fi HUD aesthetic.
+static void skinDrawHoloGrid(bool armed, bool alarmActive, float distanceCm,
+                              bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                              const String &deviceName, float triggerDistanceCm,
+                              bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int horizonY = 14, vanishX = 64;
+  // Converging side rails.
+  oled.drawLine(vanishX, horizonY, 0, 64, SSD1306_WHITE);
+  oled.drawLine(vanishX, horizonY, 128, 64, SSD1306_WHITE);
+  // Horizontal rungs, spaced closer near the horizon, scrolling down over time.
+  float scroll = (millis() % 1200) / 1200.0f;
+  for (int i = 0; i < 6; i++) {
+    float t = (i + scroll) / 6.0f; // 0 near horizon .. 1 near viewer
+    int y = horizonY + (int)(t * t * (64 - horizonY));
+    int halfW = (int)(t * (128 - vanishX));
+    oled.drawLine(vanishX - halfW, y, vanishX + halfW, y, SSD1306_WHITE);
+  }
+}
+
+// Premium 8 — Orbital Rings. Concentric rings, each with one small
+// dot orbiting at its own speed, a lazy little solar system.
+static void skinDrawOrbitalRingsPremium(bool armed, bool alarmActive, float distanceCm,
+                                         bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                         const String &deviceName, float triggerDistanceCm,
+                                         bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 32;
+  const int radii[3] = {10, 20, 30};
+  const float speeds[3] = {1800.0f, 3400.0f, 5200.0f};
+  oled.fillCircle(cx, cy, 3, SSD1306_WHITE);
+  for (int i = 0; i < 3; i++) {
+    oled.drawCircle(cx, cy, radii[i], SSD1306_WHITE);
+    float a = (millis() / speeds[i]) * 2 * PI;
+    oled.fillCircle(cx + (int)(cos(a) * radii[i]), cy + (int)(sin(a) * radii[i]), 2, SSD1306_WHITE);
+  }
+}
+
+// Premium 9 — Celestial Drift. A small field of stars that slowly
+// rotates as one body around the screen center, twinkling gently.
+// Distinct from the free-tier "Constellation" skin (static dot-to-dot
+// shape) — this one has no fixed shape, just a drifting starfield.
+static void skinDrawCelestialDrift(bool armed, bool alarmActive, float distanceCm,
+                                    bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                    const String &deviceName, float triggerDistanceCm,
+                                    bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 32;
+  const int starCount = 14;
+  float rotation = millis() / 9000.0f; // one full slow rotation ~56s
+  for (int i = 0; i < starCount; i++) {
+    unsigned long seed = i * 977 + 131;
+    float baseAngle = (seed % 360) * PI / 180.0f;
+    float dist = 8 + (seed % 26);
+    float a = baseAngle + rotation;
+    int x = cx + (int)(cos(a) * dist);
+    int y = cy + (int)(sin(a) * dist * 0.6f); // slightly flattened, less circular-looking
+    bool on = ((millis() + seed) / (400 + (seed % 300))) % 2 == 0;
+    if (on) oled.drawPixel(x, y, SSD1306_WHITE);
+  }
+}
+
+// Premium 10 — Night Guardian. An original bat silhouette (not any
+// trademarked emblem — natural wing anatomy, not a stylized logo)
+// that gently flaps in a soft glow, front-and-center, dark/heroic mood.
+static void skinDrawNightGuardian(bool armed, bool alarmActive, float distanceCm,
+                                   bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                   const String &deviceName, float triggerDistanceCm,
+                                   bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 30;
+  // Soft glow rings behind, slowly breathing.
+  float breath = (sin(millis() / 1600.0f) + 1.0f) / 2.0f;
+  int glowR = 26 + (int)(breath * 4);
+  oled.drawCircle(cx, cy, glowR, SSD1306_WHITE);
+  // Wings flap via a vertical scale factor on the wingtip Y offset.
+  float flap = sin(millis() / 500.0f); // -1..1, faster than the glow
+  int wingDrop = (int)(flap * 6);
+  // Body
+  oled.fillTriangle(cx - 3, cy - 4, cx + 3, cy - 4, cx, cy + 8, SSD1306_WHITE);
+  // Left wing (3-point wing shape, tip moves with flap)
+  oled.drawLine(cx - 3, cy - 2, cx - 24, cy - 2 + wingDrop, SSD1306_WHITE);
+  oled.drawLine(cx - 24, cy - 2 + wingDrop, cx - 14, cy + 6, SSD1306_WHITE);
+  oled.drawLine(cx - 14, cy + 6, cx - 3, cy, SSD1306_WHITE);
+  // Right wing (mirrored)
+  oled.drawLine(cx + 3, cy - 2, cx + 24, cy - 2 + wingDrop, SSD1306_WHITE);
+  oled.drawLine(cx + 24, cy - 2 + wingDrop, cx + 14, cy + 6, SSD1306_WHITE);
+  oled.drawLine(cx + 14, cy + 6, cx + 3, cy, SSD1306_WHITE);
+}
+
+// Premium 11 — Floating Particles. A handful of soft dust-motes drift
+// slowly in straight lines, wrapping around the edges when they exit.
+static void skinDrawFloatingParticles(bool armed, bool alarmActive, float distanceCm,
+                                       bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                       const String &deviceName, float triggerDistanceCm,
+                                       bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int count = 9;
+  for (int i = 0; i < count; i++) {
+    unsigned long seed = i * 733 + 91;
+    float speedX = 6.0f + (seed % 5);           // px per "unit time"
+    float speedY = 3.0f + ((seed / 5) % 4);
+    float dirX = (seed % 2 == 0) ? 1.0f : -1.0f;
+    float dirY = ((seed / 2) % 2 == 0) ? 1.0f : -1.0f;
+    float t = millis() / 1000.0f;
+    int x = ((int)(seed % 128) + (int)(t * speedX * dirX));
+    int y = ((int)((seed * 7) % 64) + (int)(t * speedY * dirY));
+    x = ((x % 128) + 128) % 128;
+    y = ((y % 64) + 64) % 64;
+    oled.drawPixel(x, y, SSD1306_WHITE);
+    if ((seed % 3) == 0) oled.drawPixel(x + 1, y, SSD1306_WHITE); // a few slightly bigger motes
+  }
+}
+
+// Premium 12 — Growing Tree. A simple line-art tree, trunk fixed,
+// branches gently swaying like a light breeze.
+static void skinDrawGrowingTree(bool armed, bool alarmActive, float distanceCm,
+                                 bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                 const String &deviceName, float triggerDistanceCm,
+                                 bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int baseX = 64, baseY = 58;
+  float sway = sin(millis() / 1800.0f) * 3.0f;
+  oled.drawLine(baseX, baseY, baseX, baseY - 24, SSD1306_WHITE); // trunk
+  // Branch pairs, each higher pair sways a bit more than the one below.
+  struct Branch { int fromY; int len; float swayMul; };
+  Branch branches[4] = {{baseY - 8, 14, 0.6f}, {baseY - 14, 16, 0.9f}, {baseY - 19, 14, 1.2f}, {baseY - 23, 10, 1.5f}};
+  for (int i = 0; i < 4; i++) {
+    float s = sway * branches[i].swayMul;
+    int fx = baseX, fy = branches[i].fromY;
+    oled.drawLine(fx, fy, fx - branches[i].len + (int)s, fy - branches[i].len / 2, SSD1306_WHITE);
+    oled.drawLine(fx, fy, fx + branches[i].len + (int)s, fy - branches[i].len / 2, SSD1306_WHITE);
+  }
+}
+
+// Premium 13 — Falling Leaves. A few small leaf-shapes drift downward
+// in a gentle zigzag, looping back to the top once off-screen.
+static void skinDrawFallingLeaves(bool armed, bool alarmActive, float distanceCm,
+                                   bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                   const String &deviceName, float triggerDistanceCm,
+                                   bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int count = 5;
+  for (int i = 0; i < count; i++) {
+    unsigned long seed = i * 611 + 47;
+    float fallSpeed = 10.0f + (seed % 6);
+    unsigned long cycleMs = (unsigned long)((64.0f + 20) / fallSpeed * 1000);
+    unsigned long offset = (cycleMs / count) * i;
+    float phase = ((millis() + offset) % cycleMs) / (float)cycleMs;
+    int y = (int)(phase * (64 + 20)) - 10;
+    int baseX = (int)(seed % 118) + 5;
+    int x = baseX + (int)(sin(phase * 6 * PI) * 10); // zigzag drift
+    // Tiny diamond leaf shape.
+    oled.drawLine(x, y - 2, x + 2, y, SSD1306_WHITE);
+    oled.drawLine(x + 2, y, x, y + 2, SSD1306_WHITE);
+    oled.drawLine(x, y + 2, x - 2, y, SSD1306_WHITE);
+    oled.drawLine(x - 2, y, x, y - 2, SSD1306_WHITE);
+  }
+}
+
+// Premium 14 — VHS Static. Horizontal scanlines with an occasional
+// glitch-band that jitters sideways, classic old-tape aesthetic.
+static void skinDrawVhsStatic(bool armed, bool alarmActive, float distanceCm,
+                               bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                               const String &deviceName, float triggerDistanceCm,
+                               bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  for (int y = 4; y < 60; y += 3) {
+    oled.drawLine(0, y, 128, y, SSD1306_WHITE);
+  }
+  // A glitch band sweeps down slowly, jittering horizontally each pass.
+  unsigned long cycle = millis() % 5000;
+  int glitchY = (int)((cycle / 5000.0f) * 64);
+  unsigned long jitterSeed = millis() / 80;
+  int jitterX = (int)(jitterSeed % 7) - 3;
+  oled.fillRect(jitterX, glitchY, 128, 4, SSD1306_BLACK);
+  oled.drawLine(jitterX, glitchY, jitterX + 128, glitchY, SSD1306_WHITE);
+}
+
+// Premium 15 — Pixel Arcade. Blocky retro corner-brackets framing the
+// screen, pulsing on/off like an 8-bit game's "insert coin" border.
+static void skinDrawPixelArcade(bool armed, bool alarmActive, float distanceCm,
+                                 bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                 const String &deviceName, float triggerDistanceCm,
+                                 bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  bool on = ((millis() / 500) % 2) == 0;
+  if (on) {
+    const int cornerLen = 14, inset = 3;
+    // 4 corner brackets, blocky (2px thick via double lines).
+    int corners[4][2] = {{inset, inset}, {128 - inset, inset}, {inset, 64 - inset}, {128 - inset, 64 - inset}};
+    for (int c = 0; c < 4; c++) {
+      int cx = corners[c][0], cy = corners[c][1];
+      int dx = (c % 2 == 0) ? 1 : -1;
+      int dy = (c < 2) ? 1 : -1;
+      oled.drawLine(cx, cy, cx + cornerLen * dx, cy, SSD1306_WHITE);
+      oled.drawLine(cx, cy, cx, cy + cornerLen * dy, SSD1306_WHITE);
+      oled.drawLine(cx, cy + dy, cx + cornerLen * dx, cy + dy, SSD1306_WHITE);
+      oled.drawLine(cx + dx, cy, cx + dx, cy + cornerLen * dy, SSD1306_WHITE);
+    }
+  }
+  // Center pixel-star, always visible, small blocky burst.
+  const int cx = 64, cy = 32;
+  oled.fillRect(cx - 1, cy - 1, 3, 3, SSD1306_WHITE);
+  oled.drawPixel(cx - 3, cy, SSD1306_WHITE);
+  oled.drawPixel(cx + 3, cy, SSD1306_WHITE);
+  oled.drawPixel(cx, cy - 3, SSD1306_WHITE);
+  oled.drawPixel(cx, cy + 3, SSD1306_WHITE);
+}
+
+// Premium 16 — Data Stream. Vertical columns of falling dashes at
+// staggered speeds, an abstracted "digital rain" (no characters, just
+// motion, since this display has no room for tiny readable glyphs).
+static void skinDrawDataStream(bool armed, bool alarmActive, float distanceCm,
+                                bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                const String &deviceName, float triggerDistanceCm,
+                                bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int columns = 12;
+  for (int c = 0; c < columns; c++) {
+    int x = c * (128 / columns) + 4;
+    unsigned long seed = c * 419 + 61;
+    float speed = 24.0f + (seed % 20);
+    unsigned long cycleMs = (unsigned long)((64.0f + 16) / speed * 1000);
+    unsigned long offset = (seed % cycleMs);
+    float phase = ((millis() + offset) % cycleMs) / (float)cycleMs;
+    int headY = (int)(phase * (64 + 16)) - 8;
+    // A short streak trailing above the head, fading via gaps.
+    for (int t = 0; t < 4; t++) {
+      int y = headY - t * 3;
+      if (y >= 0 && y < 64 && (t == 0 || (seed + t) % 2 == 0)) {
+        oled.drawPixel(x, y, SSD1306_WHITE);
+      }
+    }
+  }
+}
+
+// Premium 17 — Sleepy Cat. A simple line-art cat, curled and resting,
+// chest gently rising with breath and an occasional slow blink.
+static void skinDrawSleepyCat(bool armed, bool alarmActive, float distanceCm,
+                               bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                               const String &deviceName, float triggerDistanceCm,
+                               bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 40;
+  float breath = sin(millis() / 1400.0f);
+  int bodyR = 20 + (int)(breath * 1.5f);
+  oled.drawCircle(cx, cy, bodyR, SSD1306_WHITE); // curled body
+  // Head, slightly above-left of body center.
+  const int headX = cx - 6, headY = cy - 18;
+  oled.drawCircle(headX, headY, 9, SSD1306_WHITE);
+  // Ears (triangles).
+  oled.drawLine(headX - 7, headY - 5, headX - 3, headY - 13, SSD1306_WHITE);
+  oled.drawLine(headX - 3, headY - 13, headX - 1, headY - 6, SSD1306_WHITE);
+  oled.drawLine(headX + 2, headY - 8, headX + 5, headY - 14, SSD1306_WHITE);
+  oled.drawLine(headX + 5, headY - 14, headX + 7, headY - 7, SSD1306_WHITE);
+  // Eyes — slow blink every ~5s.
+  bool eyesClosed = (millis() % 5000) > 4700;
+  if (eyesClosed) {
+    oled.drawLine(headX - 4, headY, headX - 1, headY, SSD1306_WHITE);
+    oled.drawLine(headX + 2, headY, headX + 5, headY, SSD1306_WHITE);
+  } else {
+    oled.drawPixel(headX - 3, headY, SSD1306_WHITE);
+    oled.drawPixel(headX + 3, headY, SSD1306_WHITE);
+  }
+  // Tail curling around, fixed shape (sleeping, doesn't need to move much).
+  oled.drawLine(cx + bodyR - 4, cy + 4, cx + bodyR + 4, cy - 6, SSD1306_WHITE);
+}
+
+// Premium 18 — Little Robot Buddy. A friendly blocky robot face, one
+// blinking eye-pair and a gently swaying antenna.
+static void skinDrawRobotBuddy(bool armed, bool alarmActive, float distanceCm,
+                                bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                const String &deviceName, float triggerDistanceCm,
+                                bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 34, headW = 34, headH = 26;
+  // Antenna, swaying gently.
+  float sway = sin(millis() / 900.0f) * 4.0f;
+  int antX = cx, antY = cy - headH / 2;
+  oled.drawLine(antX, antY, antX + (int)sway, antY - 12, SSD1306_WHITE);
+  oled.drawCircle(antX + (int)sway, antY - 14, 2, SSD1306_WHITE);
+  // Head (rounded rect via rect + corner adjustment isn't available, use plain rect).
+  oled.drawRoundRect(cx - headW / 2, cy - headH / 2, headW, headH, 5, SSD1306_WHITE);
+  // Eyes — blink every ~4s.
+  bool eyesClosed = (millis() % 4000) > 3800;
+  int eyeY = cy - 2;
+  if (eyesClosed) {
+    oled.drawLine(cx - 9, eyeY, cx - 4, eyeY, SSD1306_WHITE);
+    oled.drawLine(cx + 4, eyeY, cx + 9, eyeY, SSD1306_WHITE);
+  } else {
+    oled.fillCircle(cx - 7, eyeY, 3, SSD1306_WHITE);
+    oled.fillCircle(cx + 7, eyeY, 3, SSD1306_WHITE);
+  }
+  // Mouth, a simple fixed friendly line.
+  oled.drawLine(cx - 6, cy + 8, cx + 6, cy + 8, SSD1306_WHITE);
+  // Side bolts for character.
+  oled.fillCircle(cx - headW / 2 - 2, cy, 1, SSD1306_WHITE);
+  oled.fillCircle(cx + headW / 2 + 2, cy, 1, SSD1306_WHITE);
+}
+
+// Premium 19 — Swiss Grid. A clean Bauhaus-style grid of rectangles
+// with one accent block that slowly drifts between grid positions.
+static void skinDrawSwissGrid(bool armed, bool alarmActive, float distanceCm,
+                               bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                               const String &deviceName, float triggerDistanceCm,
+                               bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cols = 6, rows = 3, cellW = 128 / cols, cellH = 64 / rows;
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      oled.drawRect(c * cellW, r * cellH, cellW - 2, cellH - 2, SSD1306_WHITE);
+    }
+  }
+  // The accent block moves through cells slowly, one cell every 1.5s.
+  int totalCells = cols * rows;
+  int idx = (int)((millis() / 1500) % totalCells);
+  int ar = idx / cols, ac = idx % cols;
+  oled.fillRect(ac * cellW, ar * cellH, cellW - 2, cellH - 2, SSD1306_WHITE);
+}
+
+// Premium 20 — Orbiting Planets. A single planet on a slow elliptical
+// orbit around a fixed sun, trailing a faint orbit-path ring.
+static void skinDrawOrbitingPlanets(bool armed, bool alarmActive, float distanceCm,
+                                     bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                     const String &deviceName, float triggerDistanceCm,
+                                     bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 32, orbitRx = 40, orbitRy = 16;
+  oled.fillCircle(cx, cy, 6, SSD1306_WHITE); // sun
+  // Orbit path, drawn as a dashed ellipse approximation.
+  for (int i = 0; i < 36; i += 2) {
+    float a = i * 10 * PI / 180.0f;
+    oled.drawPixel(cx + (int)(cos(a) * orbitRx), cy + (int)(sin(a) * orbitRy), SSD1306_WHITE);
+  }
+  float a = millis() / 4000.0f;
+  int px = cx + (int)(cos(a) * orbitRx);
+  int py = cy + (int)(sin(a) * orbitRy);
+  oled.fillCircle(px, py, 3, SSD1306_WHITE);
+}
+
+// Premium 21 — Soft Pulse Dot. The simplest possible skin: one center
+// dot with a halo that expands and fades, endlessly, about as
+// minimal and calming as this display can get.
+static void skinDrawSoftPulseDot(bool armed, bool alarmActive, float distanceCm,
+                                  bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                  const String &deviceName, float triggerDistanceCm,
+                                  bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 32;
+  oled.fillCircle(cx, cy, 3, SSD1306_WHITE);
+  const unsigned long cycleMs = 2600;
+  float phase = (millis() % cycleMs) / (float)cycleMs;
+  int haloR = 3 + (int)(phase * 24);
+  if (phase < 0.85f) oled.drawCircle(cx, cy, haloR, SSD1306_WHITE);
+}
+
+// Premium 22 — Raindrop Ripples. Drops fall from the top edge at
+// staggered points and moments; each lands and spawns an expanding
+// ripple ring at that spot.
+static void skinDrawRaindropRipples(bool armed, bool alarmActive, float distanceCm,
+                                     bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                     const String &deviceName, float triggerDistanceCm,
+                                     bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int drops = 3;
+  const unsigned long cycleMs = 2400;
+  for (int i = 0; i < drops; i++) {
+    unsigned long seed = i * 853 + 29;
+    unsigned long offset = (cycleMs / drops) * i;
+    float phase = ((millis() + offset) % cycleMs) / (float)cycleMs;
+    int landX = 24 + (int)(seed % 80);
+    int landY = 16 + (int)((seed * 3) % 32);
+    if (phase < 0.35f) {
+      // Falling drop, a short vertical dash approaching landY.
+      int dropY = (int)(phase / 0.35f * landY);
+      oled.drawLine(landX, dropY > 3 ? dropY - 3 : 0, landX, dropY, SSD1306_WHITE);
+    } else {
+      // Expanding ripple after landing.
+      float rp = (phase - 0.35f) / 0.65f;
+      int r = (int)(rp * 18);
+      if (r > 0) oled.drawCircle(landX, landY, r, SSD1306_WHITE);
+    }
+  }
+}
+
+// Premium 23 — Dot Matrix Print. A horizontal line sweeps down the
+// screen, "printing" a fixed dot-pattern row by row as it passes,
+// old dot-matrix-printer style, then resets and does it again.
+static void skinDrawDotMatrixPrint(bool armed, bool alarmActive, float distanceCm,
+                                    bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                    const String &deviceName, float triggerDistanceCm,
+                                    bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const unsigned long cycleMs = 3500;
+  float phase = (millis() % cycleMs) / (float)cycleMs;
+  int headY = (int)(phase * 64);
+  // Fixed dot-grid pattern, only drawn up to the print-head's current row.
+  for (int y = 4; y <= headY; y += 6) {
+    for (int x = 8; x < 120; x += 8) {
+      unsigned long seed = (x * 7 + y * 13);
+      if ((seed % 3) != 0) oled.drawPixel(x, y, SSD1306_WHITE);
+    }
+  }
+  // Print head itself, a small solid bar.
+  oled.drawLine(0, headY, 128, headY, SSD1306_WHITE);
+}
+
+// Premium 24 — Cyberpunk Terminal. Neon corner-brackets framing the
+// screen with a scanline sweeping through, HUD-style, slightly edgy.
+static void skinDrawCyberpunkTerminal(bool armed, bool alarmActive, float distanceCm,
+                                       bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                       const String &deviceName, float triggerDistanceCm,
+                                       bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int inset = 5, bracketLen = 16;
+  int corners[4][2] = {{inset, inset}, {128 - inset, inset}, {inset, 64 - inset}, {128 - inset, 64 - inset}};
+  for (int c = 0; c < 4; c++) {
+    int cx = corners[c][0], cy = corners[c][1];
+    int dx = (c % 2 == 0) ? 1 : -1;
+    int dy = (c < 2) ? 1 : -1;
+    oled.drawLine(cx, cy, cx + bracketLen * dx, cy, SSD1306_WHITE);
+    oled.drawLine(cx, cy, cx, cy + bracketLen * dy, SSD1306_WHITE);
+  }
+  // Center diamond accent.
+  const int mx = 64, my = 32;
+  oled.drawLine(mx, my - 6, mx + 6, my, SSD1306_WHITE);
+  oled.drawLine(mx + 6, my, mx, my + 6, SSD1306_WHITE);
+  oled.drawLine(mx, my + 6, mx - 6, my, SSD1306_WHITE);
+  oled.drawLine(mx - 6, my, mx, my - 6, SSD1306_WHITE);
+  // Scanline sweeping top to bottom.
+  int scanY = (int)((millis() % 2000) / 2000.0f * 64);
+  oled.drawLine(inset, scanY, 128 - inset, scanY, SSD1306_WHITE);
+}
+
+// Premium 25 — Watchdog. A simple dog silhouette, ears perked, tail
+// giving a slow, friendly wag.
+static void skinDrawWatchdog(bool armed, bool alarmActive, float distanceCm,
+                              bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                              const String &deviceName, float triggerDistanceCm,
+                              bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int hx = 54, hy = 30; // head center
+  oled.drawCircle(hx, hy, 10, SSD1306_WHITE);
+  // Ears, perked triangles.
+  oled.drawLine(hx - 8, hy - 6, hx - 12, hy - 16, SSD1306_WHITE);
+  oled.drawLine(hx - 12, hy - 16, hx - 3, hy - 9, SSD1306_WHITE);
+  oled.drawLine(hx + 6, hy - 8, hx + 11, hy - 17, SSD1306_WHITE);
+  oled.drawLine(hx + 11, hy - 17, hx + 9, hy - 6, SSD1306_WHITE);
+  // Snout.
+  oled.drawLine(hx + 8, hy + 2, hx + 16, hy + 4, SSD1306_WHITE);
+  oled.drawLine(hx + 16, hy + 4, hx + 16, hy + 8, SSD1306_WHITE);
+  oled.drawLine(hx + 16, hy + 8, hx + 7, hy + 7, SSD1306_WHITE);
+  oled.fillCircle(hx + 1, hy - 2, 1, SSD1306_WHITE); // eye
+  // Body, simple oval-ish via ellipse-by-lines.
+  oled.drawLine(hx - 8, hy + 8, hx - 22, hy + 16, SSD1306_WHITE);
+  oled.drawLine(hx - 22, hy + 16, hx - 24, hy + 34, SSD1306_WHITE);
+  oled.drawLine(hx - 24, hy + 34, hx + 10, hy + 34, SSD1306_WHITE);
+  oled.drawLine(hx + 10, hy + 34, hx + 8, hy + 8, SSD1306_WHITE);
+  // Tail, wagging left-right slowly at the fixed pivot.
+  float wag = sin(millis() / 550.0f) * 14.0f;
+  oled.drawLine(hx - 22, hy + 18, hx - 22 + (int)wag, hy + 4, SSD1306_WHITE);
+}
+
+// Premium 26 — Minimalist Gauge. One clean thin arc with a slow needle
+// sweep, nothing else on screen, ultra restrained.
+static void skinDrawMinimalistGauge(bool armed, bool alarmActive, float distanceCm,
+                                     bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                     const String &deviceName, float triggerDistanceCm,
+                                     bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int cx = 64, cy = 36, r = 26;
+  const float startDeg = 160, sweepDeg = 220;
+  for (int i = 0; i <= 60; i++) {
+    float a = (startDeg + sweepDeg * i / 60.0f) * PI / 180.0f;
+    int x = cx + (int)(cos(a) * r), y = cy + (int)(sin(a) * r);
+    oled.drawPixel(x, y, SSD1306_WHITE);
+  }
+  float phase = (sin(millis() / 2600.0f) + 1.0f) / 2.0f;
+  float needleA = (startDeg + sweepDeg * phase) * PI / 180.0f;
+  oled.drawLine(cx, cy, cx + (int)(cos(needleA) * (r - 4)), cy + (int)(sin(needleA) * (r - 4)), SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+}
+
+// Premium 27 — Corporate Ticker. An abstract horizontal bar-chart
+// ticker that scrolls continuously right to left, stock-exchange feel
+// without any actual numbers (this display can't render them small
+// enough to be worth including).
+static void skinDrawCorporateTicker(bool armed, bool alarmActive, float distanceCm,
+                                     bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                     const String &deviceName, float triggerDistanceCm,
+                                     bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  oled.drawLine(0, 34, 128, 34, SSD1306_WHITE); // baseline
+  int scrollOffset = (int)((millis() / 30) % 160);
+  const int barCount = 16, spacing = 10;
+  for (int i = -1; i < barCount; i++) {
+    int x = i * spacing - scrollOffset + 160;
+    x = ((x % 160) + 160) % 160 - 16;
+    unsigned long seed = (x / spacing) * 331 + 71;
+    int h = 3 + (int)(seed % 20);
+    bool up = (seed % 2) == 0;
+    if (up) oled.drawLine(x, 34, x, 34 - h, SSD1306_WHITE);
+    else oled.drawLine(x, 34, x, 34 + h, SSD1306_WHITE);
+  }
+}
+
+// Premium 28 — Architectural Blueprint. A technical-drawing grid with
+// a simple house/structure outline that "draws itself" repeatedly, a
+// pen tracing the same shape on loop.
+static void skinDrawBlueprint(bool armed, bool alarmActive, float distanceCm,
+                               bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                               const String &deviceName, float triggerDistanceCm,
+                               bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  // Faint background grid.
+  for (int x = 0; x < 128; x += 16) oled.drawLine(x, 0, x, 64, SSD1306_WHITE);
+  for (int y = 0; y < 64; y += 16) oled.drawLine(0, y, 128, y, SSD1306_WHITE);
+  // A simple house outline, traced progressively over a 3s cycle.
+  const int pts[6][2] = {{44, 44}, {44, 24}, {64, 10}, {84, 24}, {84, 44}, {44, 44}};
+  const unsigned long cycleMs = 3000;
+  float phase = (millis() % cycleMs) / (float)cycleMs;
+  float totalSegs = 5.0f;
+  float drawnSegs = phase * totalSegs;
+  for (int i = 0; i < 5; i++) {
+    if (drawnSegs >= i + 1) {
+      oled.drawLine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], SSD1306_WHITE);
+    } else if (drawnSegs > i) {
+      float segPhase = drawnSegs - i;
+      int mx = pts[i][0] + (int)((pts[i + 1][0] - pts[i][0]) * segPhase);
+      int my = pts[i][1] + (int)((pts[i + 1][1] - pts[i][1]) * segPhase);
+      oled.drawLine(pts[i][0], pts[i][1], mx, my, SSD1306_WHITE);
+    }
+  }
+}
+
+// Premium 29 — Zen Sand Garden. Raked sand-lines that slowly shift
+// their wave pattern, like a rock garden being re-raked over time.
+static void skinDrawZenGarden(bool armed, bool alarmActive, float distanceCm,
+                               bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                               const String &deviceName, float triggerDistanceCm,
+                               bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  float drift = millis() / 3000.0f;
+  for (int row = 0; row < 8; row++) {
+    int y = row * 8 + 4;
+    int prevX = 0, prevY = y;
+    for (int x = 0; x <= 128; x += 4) {
+      float t = (x / 20.0f) + drift + row * 0.3f;
+      int wy = y + (int)(sin(t) * 3);
+      if (x > 0) oled.drawLine(prevX, prevY, x, wy, SSD1306_WHITE);
+      prevX = x; prevY = wy;
+    }
+  }
+  // A "stone" circle sitting still among the raked lines.
+  oled.fillCircle(96, 20, 5, SSD1306_BLACK);
+  oled.drawCircle(96, 20, 5, SSD1306_WHITE);
+}
+
+// Premium 30 — Polar Aurora. Vertical drifting light-curtains (as
+// opposed to Aurora Waves' horizontal layers), each ribbon swaying
+// independently top to bottom.
+static void skinDrawPolarAurora(bool armed, bool alarmActive, float distanceCm,
+                                 bool distanceValid, bool wifiConnected, bool buzzerReachable,
+                                 const String &deviceName, float triggerDistanceCm,
+                                 bool inZone, bool blink) {
+  (void)armed; (void)alarmActive; (void)distanceCm; (void)distanceValid;
+  (void)wifiConnected; (void)buzzerReachable; (void)deviceName; (void)triggerDistanceCm;
+  (void)inZone; (void)blink;
+  const int ribbons = 5;
+  for (int i = 0; i < ribbons; i++) {
+    float baseX = 14 + i * 25;
+    float speed = 1400.0f + i * 260.0f;
+    int prevX = (int)baseX, prevY = 0;
+    for (int y = 0; y <= 64; y += 4) {
+      float t = (y / 12.0f) + (millis() / speed) + i;
+      int x = (int)(baseX + sin(t) * 10);
+      if (y > 0) oled.drawLine(prevX, prevY, x, y, SSD1306_WHITE);
+      prevX = x; prevY = y;
+    }
+  }
+}
+
 namespace Display {
 
 void setSkin(uint8_t skin) {
@@ -1328,6 +2136,36 @@ void showReadingScreen(bool armed, bool alarmActive, float distanceCm,
     case 27: skinDrawStarField(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
     case 28: skinDrawHourglassTimer(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
     case 29: skinDrawConstellation(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 30: skinDrawBreathingCircle(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 31: skinDrawInkRipple(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 32: skinDrawMoonPhases(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 33: skinDrawAuroraWaves(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 34: skinDrawCassetteReels(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 35: skinDrawTuningDial(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 36: skinDrawHoloGrid(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 37: skinDrawOrbitalRingsPremium(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 38: skinDrawCelestialDrift(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 39: skinDrawNightGuardian(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 40: skinDrawFloatingParticles(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 41: skinDrawGrowingTree(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 42: skinDrawFallingLeaves(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 43: skinDrawVhsStatic(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 44: skinDrawPixelArcade(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 45: skinDrawDataStream(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 46: skinDrawSleepyCat(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 47: skinDrawRobotBuddy(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 48: skinDrawSwissGrid(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 49: skinDrawOrbitingPlanets(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 50: skinDrawSoftPulseDot(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 51: skinDrawRaindropRipples(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 52: skinDrawDotMatrixPrint(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 53: skinDrawCyberpunkTerminal(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 54: skinDrawWatchdog(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 55: skinDrawMinimalistGauge(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 56: skinDrawCorporateTicker(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 57: skinDrawBlueprint(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 58: skinDrawZenGarden(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
+    case 59: skinDrawPolarAurora(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
     default: skinDrawClassic(armed, alarmActive, distanceCm, distanceValid, wifiConnected, buzzerReachable, deviceName, triggerDistanceCm, inZone, blink); break;
   }
 

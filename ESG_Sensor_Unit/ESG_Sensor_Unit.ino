@@ -23,6 +23,7 @@ Settings settings; // Global — loaded once in setup(), used/updated across loo
 bool displayAvailable = false; // Set in setup(), used by the calibration progress callback
 bool armed = true;             // Initialized from settings.armed in setup(); persisted on change
 bool armedByNightMode = false; // true ONLY if Night Mode itself set armed=true — lets us tell
+bool nightModeFailsafeGuess = false; // true when armedByNightMode was set by the boot-time failsafe below, not a genuine night-arm — see its self-correction further down
                                 // apart "user manually armed" from "Night Mode auto-armed", so
                                 // Night Mode only ever undoes its OWN action, never a manual one.
 int consecutiveInZone = 0; // Requires INTRUSION_CONFIRM_READINGS in a row before firing (false-positive fix)
@@ -150,6 +151,7 @@ void setup() {
   if (settings.nightMode && !armed) {
     armed = true;
     armedByNightMode = true;
+    nightModeFailsafeGuess = true;
     Serial.println("[MAIN] Night Mode fail-safe: temporarily armed until time syncs (was disarmed before restart).");
   }
 
@@ -464,12 +466,27 @@ void loop() {
         armed = true;
         armedByNightMode = true;
         Serial.println("[MAIN] Night Mode: auto-arming.");
-        Notify::sendTextMessage("🌙 Night Mode Started\n\nGood night! The system has armed itself for the night.");
+        Notify::sendTextMessage("🌙 Night Mode Started\n\nThe system has armed itself for the night.");
+      } else if (isNight && armedByNightMode && nightModeFailsafeGuess) {
+        // The boot-time guess turned out to be correct — it really is
+        // night. From here on this is a confirmed, genuine night-arm,
+        // so the eventual dawn transition should notify normally.
+        nightModeFailsafeGuess = false;
       } else if (!isNight && armedByNightMode) {
         armed = false;
         armedByNightMode = false;
-        Serial.println("[MAIN] Night Mode: auto-disarming (was auto-armed by Night Mode).");
-        Notify::sendTextMessage("🌙 Night Mode Ended\n\nGood morning! The system has disarmed itself for the day.");
+        if (nightModeFailsafeGuess) {
+          // This wasn't a genuine night-to-day transition — it's the
+          // boot-time failsafe guess (see setup()) correcting itself
+          // now that real time is known and it turns out to already be
+          // daytime. Nothing to tell the user, the system was never
+          // actually night-armed this session.
+          nightModeFailsafeGuess = false;
+          Serial.println("[MAIN] Night Mode: failsafe guess corrected (already daytime), no notification.");
+        } else {
+          Serial.println("[MAIN] Night Mode: auto-disarming (was auto-armed by Night Mode).");
+          Notify::sendTextMessage("🌙 Night Mode Ended\n\nThe system has disarmed itself for the day.");
+        }
       }
     }
   }

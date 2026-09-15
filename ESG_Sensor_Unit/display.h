@@ -72,7 +72,7 @@ namespace Display {
   // like — the names below are also shown, verbatim, in the dashboard's
   // skin picker dropdown.
   // ---------------------------------------------------------------------
-  #define DISPLAY_SKIN_COUNT 30
+  #define DISPLAY_SKIN_COUNT 60
 
   // Sets which skin showReadingScreen() draws. Out-of-range values clamp
   // to skin 0 (Classic) rather than doing anything undefined.

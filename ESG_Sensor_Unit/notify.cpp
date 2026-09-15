@@ -98,7 +98,7 @@ void sendTextMessage(const String &text, bool ignorePause, bool isSecurityAlert)
     fullText = "🧪 TEST MODE\n\n" + fullText;
   }
   if (gSettings != nullptr) {
-    fullText += "\n\nDevice name: " + String(gSettings->deviceName) + ", ID: " + String(gSettings->deviceId);
+    fullText += "\n\n📡 Device name: " + String(gSettings->deviceName) + ", ID: " + String(gSettings->deviceId);
   }
 
   unsigned long start = millis();

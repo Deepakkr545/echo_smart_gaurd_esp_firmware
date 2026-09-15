@@ -22,7 +22,7 @@
 // FIRMWARE IDENTITY
 // ---------------------------------------------------------------------
 #define FIRMWARE_NAME     "Echo Smart Gaurd"
-#define FIRMWARE_VERSION  "1.0.0"
+#define FIRMWARE_VERSION  "1.1.0"
 
 #define NTP_GMT_OFFSET_SEC 19800   // IST (+5:30)
 #define NIGHT_START_HOUR   22      // 10 PM

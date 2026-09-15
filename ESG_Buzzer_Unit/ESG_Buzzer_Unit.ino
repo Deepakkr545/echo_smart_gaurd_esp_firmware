@@ -38,7 +38,7 @@
 // ---------------------------------------------------------------------
 #define BUZZ_EEPROM_SIZE 700
 #define BUZZ_MAGIC "BZ07"
-#define FIRMWARE_VERSION "1.0.0" // Buzzer Unit firmware version — exposed in /info for the app's OTA update-check
+#define FIRMWARE_VERSION "1.1.0" // Buzzer Unit firmware version — exposed in /info for the app's OTA update-check
 #define MAX_MANUAL_SENSORS 5
 #define BUZZ_NTP_GMT_OFFSET_SEC 19800 // IST +5:30, same as main sensor ESP
 
@@ -376,7 +376,7 @@ void sendTelegramMessage(const String &text) {
 
   String fullText = text;
   if (buzzerTestModeActive) fullText = "🧪 TEST MODE\n\n" + fullText;
-  fullText += "\n\nDevice name: " + String(cfg.name) + ", ID: " + String(cfg.id);
+  fullText += "\n\n🔊 Device name: " + String(cfg.name) + ", ID: " + String(cfg.id);
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -599,7 +599,7 @@ static void formatUptime(unsigned long ms, char *buf, size_t bufSize) {
 // Selected the same way — persisted in cfg.displaySkin, changed via
 // /setskin, applied immediately with no restart.
 // ---------------------------------------------------------------------
-#define DISPLAY_SKIN_COUNT 30
+#define DISPLAY_SKIN_COUNT 60
 
 static const char* SKIN_NAMES[DISPLAY_SKIN_COUNT] = {
   "Classic Numeric",
@@ -632,6 +632,36 @@ static const char* SKIN_NAMES[DISPLAY_SKIN_COUNT] = {
   "Star Field",
   "Hourglass Timer",
   "Constellation",
+  "Breathing Circle",
+  "Ink Ripple",
+  "Moon Phases",
+  "Aurora Waves",
+  "Cassette Reels",
+  "Tuning Dial",
+  "Holo Grid",
+  "Orbital Rings Pro",
+  "Celestial Drift",
+  "Night Guardian",
+  "Floating Particles",
+  "Growing Tree",
+  "Falling Leaves",
+  "VHS Static",
+  "Pixel Arcade",
+  "Data Stream",
+  "Sleepy Cat",
+  "Robot Buddy",
+  "Swiss Grid",
+  "Orbiting Planets",
+  "Soft Pulse Dot",
+  "Raindrop Ripples",
+  "Dot Matrix Print",
+  "Cyberpunk Terminal",
+  "Watchdog",
+  "Minimalist Gauge",
+  "Corporate Ticker",
+  "Blueprint",
+  "Zen Garden",
+  "Polar Aurora",
 };
 
 const char* getSkinName(uint8_t skin) {
@@ -1388,6 +1418,481 @@ static void skinDrawConstellation(unsigned long now) {
   drawCenteredText(buf, 50, 1, SSD1306_WHITE);
 }
 
+// =====================================================================
+// PREMIUM PACK — pure ambient art, mirrors the Sensor Unit's premium
+// skins exactly (same visual concepts) so a matched pair looks
+// consistent. No text, no state badges.
+// =====================================================================
+
+static void skinDrawBreathingCircle(unsigned long now) {
+  const int cx = 64, cy = 32;
+  float phase = (now % 4000) / 4000.0f;
+  float breath = (sin(phase * 2 * PI) + 1.0f) / 2.0f;
+  int r = 10 + (int)(breath * 16);
+  oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  oled.drawCircle(cx, cy, r > 2 ? r - 3 : 0, SSD1306_WHITE);
+}
+
+static void skinDrawInkRipple(unsigned long now) {
+  const int cx = 64, cy = 32, maxR = 34;
+  const unsigned long cycleMs = 3000;
+  for (int i = 0; i < 3; i++) {
+    unsigned long offset = (cycleMs / 3) * i;
+    float phase = ((now + offset) % cycleMs) / (float)cycleMs;
+    int r = (int)(phase * maxR);
+    if (r > 1) oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawMoonPhases(unsigned long now) {
+  const int cx = 64, cy = 32, r = 20;
+  const unsigned long cycleMs = 24000;
+  float phase = (now % cycleMs) / (float)cycleMs;
+  oled.fillCircle(cx, cy, r, SSD1306_WHITE);
+  float shadowX = cos(phase * 2 * PI);
+  int shadowW = (int)(r * 2 * fabs(shadowX));
+  oled.fillRect(shadowX < 0 ? cx - r : cx, cy - r, shadowW, r * 2, SSD1306_BLACK);
+}
+
+static void skinDrawAuroraWaves(unsigned long now) {
+  const float layers[3][3] = {
+    {18.0f, 6.0f, 40.0f},
+    {32.0f, 9.0f, 65.0f},
+    {46.0f, 5.0f, 90.0f},
+  };
+  for (int layer = 0; layer < 3; layer++) {
+    float baseY = layers[layer][0], amp = layers[layer][1], speed = layers[layer][2];
+    int prevX = 0, prevY = (int)baseY;
+    for (int x = 0; x <= 128; x += 3) {
+      float t = (x / speed) + (now / (speed * 30.0f));
+      int y = (int)(baseY + sin(t) * amp);
+      if (x > 0) oled.drawLine(prevX, prevY, x, y, SSD1306_WHITE);
+      prevX = x; prevY = y;
+    }
+  }
+}
+
+static void skinDrawCassetteReels(unsigned long now) {
+  const int cy = 32, r = 16, leftX = 34, rightX = 94;
+  float angle = (now / 800.0f);
+  oled.drawLine(leftX + r - 2, cy, rightX - r + 2, cy, SSD1306_WHITE);
+  int centers[2] = {leftX, rightX};
+  for (int w = 0; w < 2; w++) {
+    int cx = centers[w];
+    oled.drawCircle(cx, cy, r, SSD1306_WHITE);
+    oled.drawCircle(cx, cy, 4, SSD1306_WHITE);
+    for (int i = 0; i < 5; i++) {
+      float a = angle + (i * 2 * PI / 5);
+      oled.drawLine(cx, cy, cx + (int)(cos(a) * (r - 2)), cy + (int)(sin(a) * (r - 2)), SSD1306_WHITE);
+    }
+  }
+}
+
+static void skinDrawTuningDial(unsigned long now) {
+  const int cx = 64, cy = 50, r = 40;
+  const float startDeg = 200, sweepDeg = 140;
+  for (int i = 0; i <= 14; i++) {
+    float a = (startDeg + sweepDeg * i / 14.0f) * PI / 180.0f;
+    int len = (i % 2 == 0) ? 7 : 4;
+    oled.drawLine(cx + (int)(cos(a) * r), cy + (int)(sin(a) * r),
+                  cx + (int)(cos(a) * (r - len)), cy + (int)(sin(a) * (r - len)), SSD1306_WHITE);
+  }
+  float phase = (sin(now / 2200.0f) + 1.0f) / 2.0f;
+  float needleA = (startDeg + sweepDeg * phase) * PI / 180.0f;
+  oled.drawLine(cx, cy, cx + (int)(cos(needleA) * (r - 5)), cy + (int)(sin(needleA) * (r - 5)), SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+}
+
+static void skinDrawHoloGrid(unsigned long now) {
+  const int horizonY = 14, vanishX = 64;
+  oled.drawLine(vanishX, horizonY, 0, 64, SSD1306_WHITE);
+  oled.drawLine(vanishX, horizonY, 128, 64, SSD1306_WHITE);
+  float scroll = (now % 1200) / 1200.0f;
+  for (int i = 0; i < 6; i++) {
+    float t = (i + scroll) / 6.0f;
+    int y = horizonY + (int)(t * t * (64 - horizonY));
+    int halfW = (int)(t * (128 - vanishX));
+    oled.drawLine(vanishX - halfW, y, vanishX + halfW, y, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawOrbitalRingsPremium(unsigned long now) {
+  const int cx = 64, cy = 32;
+  const int radii[3] = {10, 20, 30};
+  const float speeds[3] = {1800.0f, 3400.0f, 5200.0f};
+  oled.fillCircle(cx, cy, 3, SSD1306_WHITE);
+  for (int i = 0; i < 3; i++) {
+    oled.drawCircle(cx, cy, radii[i], SSD1306_WHITE);
+    float a = (now / speeds[i]) * 2 * PI;
+    oled.fillCircle(cx + (int)(cos(a) * radii[i]), cy + (int)(sin(a) * radii[i]), 2, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawCelestialDrift(unsigned long now) {
+  const int cx = 64, cy = 32;
+  const int starCount = 14;
+  float rotation = now / 9000.0f;
+  for (int i = 0; i < starCount; i++) {
+    unsigned long seed = i * 977 + 131;
+    float baseAngle = (seed % 360) * PI / 180.0f;
+    float dist = 8 + (seed % 26);
+    float a = baseAngle + rotation;
+    int x = cx + (int)(cos(a) * dist);
+    int y = cy + (int)(sin(a) * dist * 0.6f);
+    bool on = ((now + seed) / (400 + (seed % 300))) % 2 == 0;
+    if (on) oled.drawPixel(x, y, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawNightGuardian(unsigned long now) {
+  const int cx = 64, cy = 30;
+  float breath = (sin(now / 1600.0f) + 1.0f) / 2.0f;
+  int glowR = 26 + (int)(breath * 4);
+  oled.drawCircle(cx, cy, glowR, SSD1306_WHITE);
+  float flap = sin(now / 500.0f);
+  int wingDrop = (int)(flap * 6);
+  oled.fillTriangle(cx - 3, cy - 4, cx + 3, cy - 4, cx, cy + 8, SSD1306_WHITE);
+  oled.drawLine(cx - 3, cy - 2, cx - 24, cy - 2 + wingDrop, SSD1306_WHITE);
+  oled.drawLine(cx - 24, cy - 2 + wingDrop, cx - 14, cy + 6, SSD1306_WHITE);
+  oled.drawLine(cx - 14, cy + 6, cx - 3, cy, SSD1306_WHITE);
+  oled.drawLine(cx + 3, cy - 2, cx + 24, cy - 2 + wingDrop, SSD1306_WHITE);
+  oled.drawLine(cx + 24, cy - 2 + wingDrop, cx + 14, cy + 6, SSD1306_WHITE);
+  oled.drawLine(cx + 14, cy + 6, cx + 3, cy, SSD1306_WHITE);
+}
+
+static void skinDrawFloatingParticles(unsigned long now) {
+  const int count = 9;
+  for (int i = 0; i < count; i++) {
+    unsigned long seed = i * 733 + 91;
+    float speedX = 6.0f + (seed % 5);
+    float speedY = 3.0f + ((seed / 5) % 4);
+    float dirX = (seed % 2 == 0) ? 1.0f : -1.0f;
+    float dirY = ((seed / 2) % 2 == 0) ? 1.0f : -1.0f;
+    float t = now / 1000.0f;
+    int x = ((int)(seed % 128) + (int)(t * speedX * dirX));
+    int y = ((int)((seed * 7) % 64) + (int)(t * speedY * dirY));
+    x = ((x % 128) + 128) % 128;
+    y = ((y % 64) + 64) % 64;
+    oled.drawPixel(x, y, SSD1306_WHITE);
+    if ((seed % 3) == 0) oled.drawPixel(x + 1, y, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawGrowingTree(unsigned long now) {
+  const int baseX = 64, baseY = 58;
+  float sway = sin(now / 1800.0f) * 3.0f;
+  oled.drawLine(baseX, baseY, baseX, baseY - 24, SSD1306_WHITE);
+  struct Branch { int fromY; int len; float swayMul; };
+  Branch branches[4] = {{baseY - 8, 14, 0.6f}, {baseY - 14, 16, 0.9f}, {baseY - 19, 14, 1.2f}, {baseY - 23, 10, 1.5f}};
+  for (int i = 0; i < 4; i++) {
+    float s = sway * branches[i].swayMul;
+    int fx = baseX, fy = branches[i].fromY;
+    oled.drawLine(fx, fy, fx - branches[i].len + (int)s, fy - branches[i].len / 2, SSD1306_WHITE);
+    oled.drawLine(fx, fy, fx + branches[i].len + (int)s, fy - branches[i].len / 2, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawFallingLeaves(unsigned long now) {
+  const int count = 5;
+  for (int i = 0; i < count; i++) {
+    unsigned long seed = i * 611 + 47;
+    float fallSpeed = 10.0f + (seed % 6);
+    unsigned long cycleMs = (unsigned long)((64.0f + 20) / fallSpeed * 1000);
+    unsigned long offset = (cycleMs / count) * i;
+    float phase = ((now + offset) % cycleMs) / (float)cycleMs;
+    int y = (int)(phase * (64 + 20)) - 10;
+    int baseX = (int)(seed % 118) + 5;
+    int x = baseX + (int)(sin(phase * 6 * PI) * 10);
+    oled.drawLine(x, y - 2, x + 2, y, SSD1306_WHITE);
+    oled.drawLine(x + 2, y, x, y + 2, SSD1306_WHITE);
+    oled.drawLine(x, y + 2, x - 2, y, SSD1306_WHITE);
+    oled.drawLine(x - 2, y, x, y - 2, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawVhsStatic(unsigned long now) {
+  for (int y = 4; y < 60; y += 3) {
+    oled.drawLine(0, y, 128, y, SSD1306_WHITE);
+  }
+  unsigned long cycle = now % 5000;
+  int glitchY = (int)((cycle / 5000.0f) * 64);
+  unsigned long jitterSeed = now / 80;
+  int jitterX = (int)(jitterSeed % 7) - 3;
+  oled.fillRect(jitterX, glitchY, 128, 4, SSD1306_BLACK);
+  oled.drawLine(jitterX, glitchY, jitterX + 128, glitchY, SSD1306_WHITE);
+}
+
+static void skinDrawPixelArcade(unsigned long now) {
+  bool on = ((now / 500) % 2) == 0;
+  if (on) {
+    const int cornerLen = 14, inset = 3;
+    int corners[4][2] = {{inset, inset}, {128 - inset, inset}, {inset, 64 - inset}, {128 - inset, 64 - inset}};
+    for (int c = 0; c < 4; c++) {
+      int cx = corners[c][0], cy = corners[c][1];
+      int dx = (c % 2 == 0) ? 1 : -1;
+      int dy = (c < 2) ? 1 : -1;
+      oled.drawLine(cx, cy, cx + cornerLen * dx, cy, SSD1306_WHITE);
+      oled.drawLine(cx, cy, cx, cy + cornerLen * dy, SSD1306_WHITE);
+      oled.drawLine(cx, cy + dy, cx + cornerLen * dx, cy + dy, SSD1306_WHITE);
+      oled.drawLine(cx + dx, cy, cx + dx, cy + cornerLen * dy, SSD1306_WHITE);
+    }
+  }
+  const int cx = 64, cy = 32;
+  oled.fillRect(cx - 1, cy - 1, 3, 3, SSD1306_WHITE);
+  oled.drawPixel(cx - 3, cy, SSD1306_WHITE);
+  oled.drawPixel(cx + 3, cy, SSD1306_WHITE);
+  oled.drawPixel(cx, cy - 3, SSD1306_WHITE);
+  oled.drawPixel(cx, cy + 3, SSD1306_WHITE);
+}
+
+static void skinDrawDataStream(unsigned long now) {
+  const int columns = 12;
+  for (int c = 0; c < columns; c++) {
+    int x = c * (128 / columns) + 4;
+    unsigned long seed = c * 419 + 61;
+    float speed = 24.0f + (seed % 20);
+    unsigned long cycleMs = (unsigned long)((64.0f + 16) / speed * 1000);
+    unsigned long offset = (seed % cycleMs);
+    float phase = ((now + offset) % cycleMs) / (float)cycleMs;
+    int headY = (int)(phase * (64 + 16)) - 8;
+    for (int t = 0; t < 4; t++) {
+      int y = headY - t * 3;
+      if (y >= 0 && y < 64 && (t == 0 || (seed + t) % 2 == 0)) {
+        oled.drawPixel(x, y, SSD1306_WHITE);
+      }
+    }
+  }
+}
+
+static void skinDrawSleepyCat(unsigned long now) {
+  const int cx = 64, cy = 40;
+  float breath = sin(now / 1400.0f);
+  int bodyR = 20 + (int)(breath * 1.5f);
+  oled.drawCircle(cx, cy, bodyR, SSD1306_WHITE);
+  const int headX = cx - 6, headY = cy - 18;
+  oled.drawCircle(headX, headY, 9, SSD1306_WHITE);
+  oled.drawLine(headX - 7, headY - 5, headX - 3, headY - 13, SSD1306_WHITE);
+  oled.drawLine(headX - 3, headY - 13, headX - 1, headY - 6, SSD1306_WHITE);
+  oled.drawLine(headX + 2, headY - 8, headX + 5, headY - 14, SSD1306_WHITE);
+  oled.drawLine(headX + 5, headY - 14, headX + 7, headY - 7, SSD1306_WHITE);
+  bool eyesClosed = (now % 5000) > 4700;
+  if (eyesClosed) {
+    oled.drawLine(headX - 4, headY, headX - 1, headY, SSD1306_WHITE);
+    oled.drawLine(headX + 2, headY, headX + 5, headY, SSD1306_WHITE);
+  } else {
+    oled.drawPixel(headX - 3, headY, SSD1306_WHITE);
+    oled.drawPixel(headX + 3, headY, SSD1306_WHITE);
+  }
+  oled.drawLine(cx + bodyR - 4, cy + 4, cx + bodyR + 4, cy - 6, SSD1306_WHITE);
+}
+
+static void skinDrawRobotBuddy(unsigned long now) {
+  const int cx = 64, cy = 34, headW = 34, headH = 26;
+  float sway = sin(now / 900.0f) * 4.0f;
+  int antX = cx, antY = cy - headH / 2;
+  oled.drawLine(antX, antY, antX + (int)sway, antY - 12, SSD1306_WHITE);
+  oled.drawCircle(antX + (int)sway, antY - 14, 2, SSD1306_WHITE);
+  oled.drawRoundRect(cx - headW / 2, cy - headH / 2, headW, headH, 5, SSD1306_WHITE);
+  bool eyesClosed = (now % 4000) > 3800;
+  int eyeY = cy - 2;
+  if (eyesClosed) {
+    oled.drawLine(cx - 9, eyeY, cx - 4, eyeY, SSD1306_WHITE);
+    oled.drawLine(cx + 4, eyeY, cx + 9, eyeY, SSD1306_WHITE);
+  } else {
+    oled.fillCircle(cx - 7, eyeY, 3, SSD1306_WHITE);
+    oled.fillCircle(cx + 7, eyeY, 3, SSD1306_WHITE);
+  }
+  oled.drawLine(cx - 6, cy + 8, cx + 6, cy + 8, SSD1306_WHITE);
+  oled.fillCircle(cx - headW / 2 - 2, cy, 1, SSD1306_WHITE);
+  oled.fillCircle(cx + headW / 2 + 2, cy, 1, SSD1306_WHITE);
+}
+
+static void skinDrawSwissGrid(unsigned long now) {
+  const int cols = 6, rows = 3, cellW = 128 / cols, cellH = 64 / rows;
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      oled.drawRect(c * cellW, r * cellH, cellW - 2, cellH - 2, SSD1306_WHITE);
+    }
+  }
+  int totalCells = cols * rows;
+  int idx = (int)((now / 1500) % totalCells);
+  int ar = idx / cols, ac = idx % cols;
+  oled.fillRect(ac * cellW, ar * cellH, cellW - 2, cellH - 2, SSD1306_WHITE);
+}
+
+static void skinDrawOrbitingPlanets(unsigned long now) {
+  const int cx = 64, cy = 32, orbitRx = 40, orbitRy = 16;
+  oled.fillCircle(cx, cy, 6, SSD1306_WHITE);
+  for (int i = 0; i < 36; i += 2) {
+    float a = i * 10 * PI / 180.0f;
+    oled.drawPixel(cx + (int)(cos(a) * orbitRx), cy + (int)(sin(a) * orbitRy), SSD1306_WHITE);
+  }
+  float a = now / 4000.0f;
+  int px = cx + (int)(cos(a) * orbitRx);
+  int py = cy + (int)(sin(a) * orbitRy);
+  oled.fillCircle(px, py, 3, SSD1306_WHITE);
+}
+
+static void skinDrawSoftPulseDot(unsigned long now) {
+  const int cx = 64, cy = 32;
+  oled.fillCircle(cx, cy, 3, SSD1306_WHITE);
+  const unsigned long cycleMs = 2600;
+  float phase = (now % cycleMs) / (float)cycleMs;
+  int haloR = 3 + (int)(phase * 24);
+  if (phase < 0.85f) oled.drawCircle(cx, cy, haloR, SSD1306_WHITE);
+}
+
+static void skinDrawRaindropRipples(unsigned long now) {
+  const int drops = 3;
+  const unsigned long cycleMs = 2400;
+  for (int i = 0; i < drops; i++) {
+    unsigned long seed = i * 853 + 29;
+    unsigned long offset = (cycleMs / drops) * i;
+    float phase = ((now + offset) % cycleMs) / (float)cycleMs;
+    int landX = 24 + (int)(seed % 80);
+    int landY = 16 + (int)((seed * 3) % 32);
+    if (phase < 0.35f) {
+      int dropY = (int)(phase / 0.35f * landY);
+      oled.drawLine(landX, dropY > 3 ? dropY - 3 : 0, landX, dropY, SSD1306_WHITE);
+    } else {
+      float rp = (phase - 0.35f) / 0.65f;
+      int r = (int)(rp * 18);
+      if (r > 0) oled.drawCircle(landX, landY, r, SSD1306_WHITE);
+    }
+  }
+}
+
+static void skinDrawDotMatrixPrint(unsigned long now) {
+  const unsigned long cycleMs = 3500;
+  float phase = (now % cycleMs) / (float)cycleMs;
+  int headY = (int)(phase * 64);
+  for (int y = 4; y <= headY; y += 6) {
+    for (int x = 8; x < 120; x += 8) {
+      unsigned long seed = (x * 7 + y * 13);
+      if ((seed % 3) != 0) oled.drawPixel(x, y, SSD1306_WHITE);
+    }
+  }
+  oled.drawLine(0, headY, 128, headY, SSD1306_WHITE);
+}
+
+static void skinDrawCyberpunkTerminal(unsigned long now) {
+  const int inset = 5, bracketLen = 16;
+  int corners[4][2] = {{inset, inset}, {128 - inset, inset}, {inset, 64 - inset}, {128 - inset, 64 - inset}};
+  for (int c = 0; c < 4; c++) {
+    int cx = corners[c][0], cy = corners[c][1];
+    int dx = (c % 2 == 0) ? 1 : -1;
+    int dy = (c < 2) ? 1 : -1;
+    oled.drawLine(cx, cy, cx + bracketLen * dx, cy, SSD1306_WHITE);
+    oled.drawLine(cx, cy, cx, cy + bracketLen * dy, SSD1306_WHITE);
+  }
+  const int mx = 64, my = 32;
+  oled.drawLine(mx, my - 6, mx + 6, my, SSD1306_WHITE);
+  oled.drawLine(mx + 6, my, mx, my + 6, SSD1306_WHITE);
+  oled.drawLine(mx, my + 6, mx - 6, my, SSD1306_WHITE);
+  oled.drawLine(mx - 6, my, mx, my - 6, SSD1306_WHITE);
+  int scanY = (int)((now % 2000) / 2000.0f * 64);
+  oled.drawLine(inset, scanY, 128 - inset, scanY, SSD1306_WHITE);
+}
+
+static void skinDrawWatchdog(unsigned long now) {
+  const int hx = 54, hy = 30;
+  oled.drawCircle(hx, hy, 10, SSD1306_WHITE);
+  oled.drawLine(hx - 8, hy - 6, hx - 12, hy - 16, SSD1306_WHITE);
+  oled.drawLine(hx - 12, hy - 16, hx - 3, hy - 9, SSD1306_WHITE);
+  oled.drawLine(hx + 6, hy - 8, hx + 11, hy - 17, SSD1306_WHITE);
+  oled.drawLine(hx + 11, hy - 17, hx + 9, hy - 6, SSD1306_WHITE);
+  oled.drawLine(hx + 8, hy + 2, hx + 16, hy + 4, SSD1306_WHITE);
+  oled.drawLine(hx + 16, hy + 4, hx + 16, hy + 8, SSD1306_WHITE);
+  oled.drawLine(hx + 16, hy + 8, hx + 7, hy + 7, SSD1306_WHITE);
+  oled.fillCircle(hx + 1, hy - 2, 1, SSD1306_WHITE);
+  oled.drawLine(hx - 8, hy + 8, hx - 22, hy + 16, SSD1306_WHITE);
+  oled.drawLine(hx - 22, hy + 16, hx - 24, hy + 34, SSD1306_WHITE);
+  oled.drawLine(hx - 24, hy + 34, hx + 10, hy + 34, SSD1306_WHITE);
+  oled.drawLine(hx + 10, hy + 34, hx + 8, hy + 8, SSD1306_WHITE);
+  float wag = sin(now / 550.0f) * 14.0f;
+  oled.drawLine(hx - 22, hy + 18, hx - 22 + (int)wag, hy + 4, SSD1306_WHITE);
+}
+
+static void skinDrawMinimalistGauge(unsigned long now) {
+  const int cx = 64, cy = 36, r = 26;
+  const float startDeg = 160, sweepDeg = 220;
+  for (int i = 0; i <= 60; i++) {
+    float a = (startDeg + sweepDeg * i / 60.0f) * PI / 180.0f;
+    int x = cx + (int)(cos(a) * r), y = cy + (int)(sin(a) * r);
+    oled.drawPixel(x, y, SSD1306_WHITE);
+  }
+  float phase = (sin(now / 2600.0f) + 1.0f) / 2.0f;
+  float needleA = (startDeg + sweepDeg * phase) * PI / 180.0f;
+  oled.drawLine(cx, cy, cx + (int)(cos(needleA) * (r - 4)), cy + (int)(sin(needleA) * (r - 4)), SSD1306_WHITE);
+  oled.fillCircle(cx, cy, 2, SSD1306_WHITE);
+}
+
+static void skinDrawCorporateTicker(unsigned long now) {
+  oled.drawLine(0, 34, 128, 34, SSD1306_WHITE);
+  int scrollOffset = (int)((now / 30) % 160);
+  const int barCount = 16, spacing = 10;
+  for (int i = -1; i < barCount; i++) {
+    int x = i * spacing - scrollOffset + 160;
+    x = ((x % 160) + 160) % 160 - 16;
+    unsigned long seed = (x / spacing) * 331 + 71;
+    int h = 3 + (int)(seed % 20);
+    bool up = (seed % 2) == 0;
+    if (up) oled.drawLine(x, 34, x, 34 - h, SSD1306_WHITE);
+    else oled.drawLine(x, 34, x, 34 + h, SSD1306_WHITE);
+  }
+}
+
+static void skinDrawBlueprint(unsigned long now) {
+  for (int x = 0; x < 128; x += 16) oled.drawLine(x, 0, x, 64, SSD1306_WHITE);
+  for (int y = 0; y < 64; y += 16) oled.drawLine(0, y, 128, y, SSD1306_WHITE);
+  const int pts[6][2] = {{44, 44}, {44, 24}, {64, 10}, {84, 24}, {84, 44}, {44, 44}};
+  const unsigned long cycleMs = 3000;
+  float phase = (now % cycleMs) / (float)cycleMs;
+  float totalSegs = 5.0f;
+  float drawnSegs = phase * totalSegs;
+  for (int i = 0; i < 5; i++) {
+    if (drawnSegs >= i + 1) {
+      oled.drawLine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], SSD1306_WHITE);
+    } else if (drawnSegs > i) {
+      float segPhase = drawnSegs - i;
+      int mx = pts[i][0] + (int)((pts[i + 1][0] - pts[i][0]) * segPhase);
+      int my = pts[i][1] + (int)((pts[i + 1][1] - pts[i][1]) * segPhase);
+      oled.drawLine(pts[i][0], pts[i][1], mx, my, SSD1306_WHITE);
+    }
+  }
+}
+
+static void skinDrawZenGarden(unsigned long now) {
+  float drift = now / 3000.0f;
+  for (int row = 0; row < 8; row++) {
+    int y = row * 8 + 4;
+    int prevX = 0, prevY = y;
+    for (int x = 0; x <= 128; x += 4) {
+      float t = (x / 20.0f) + drift + row * 0.3f;
+      int wy = y + (int)(sin(t) * 3);
+      if (x > 0) oled.drawLine(prevX, prevY, x, wy, SSD1306_WHITE);
+      prevX = x; prevY = wy;
+    }
+  }
+  oled.fillCircle(96, 20, 5, SSD1306_BLACK);
+  oled.drawCircle(96, 20, 5, SSD1306_WHITE);
+}
+
+static void skinDrawPolarAurora(unsigned long now) {
+  const int ribbons = 5;
+  for (int i = 0; i < ribbons; i++) {
+    float baseX = 14 + i * 25;
+    float speed = 1400.0f + i * 260.0f;
+    int prevX = (int)baseX, prevY = 0;
+    for (int y = 0; y <= 64; y += 4) {
+      float t = (y / 12.0f) + (now / speed) + i;
+      int x = (int)(baseX + sin(t) * 10);
+      if (y > 0) oled.drawLine(prevX, prevY, x, y, SSD1306_WHITE);
+      prevX = x; prevY = y;
+    }
+  }
+}
+
 void drawIdleScreen(unsigned long now) {
   oled.clearDisplay();
   switch (cfg.displaySkin) {
@@ -1420,6 +1925,36 @@ void drawIdleScreen(unsigned long now) {
     case 27: skinDrawStarField(now); break;
     case 28: skinDrawHourglassTimer(now); break;
     case 29: skinDrawConstellation(now); break;
+    case 30: skinDrawBreathingCircle(now); break;
+    case 31: skinDrawInkRipple(now); break;
+    case 32: skinDrawMoonPhases(now); break;
+    case 33: skinDrawAuroraWaves(now); break;
+    case 34: skinDrawCassetteReels(now); break;
+    case 35: skinDrawTuningDial(now); break;
+    case 36: skinDrawHoloGrid(now); break;
+    case 37: skinDrawOrbitalRingsPremium(now); break;
+    case 38: skinDrawCelestialDrift(now); break;
+    case 39: skinDrawNightGuardian(now); break;
+    case 40: skinDrawFloatingParticles(now); break;
+    case 41: skinDrawGrowingTree(now); break;
+    case 42: skinDrawFallingLeaves(now); break;
+    case 43: skinDrawVhsStatic(now); break;
+    case 44: skinDrawPixelArcade(now); break;
+    case 45: skinDrawDataStream(now); break;
+    case 46: skinDrawSleepyCat(now); break;
+    case 47: skinDrawRobotBuddy(now); break;
+    case 48: skinDrawSwissGrid(now); break;
+    case 49: skinDrawOrbitingPlanets(now); break;
+    case 50: skinDrawSoftPulseDot(now); break;
+    case 51: skinDrawRaindropRipples(now); break;
+    case 52: skinDrawDotMatrixPrint(now); break;
+    case 53: skinDrawCyberpunkTerminal(now); break;
+    case 54: skinDrawWatchdog(now); break;
+    case 55: skinDrawMinimalistGauge(now); break;
+    case 56: skinDrawCorporateTicker(now); break;
+    case 57: skinDrawBlueprint(now); break;
+    case 58: skinDrawZenGarden(now); break;
+    case 59: skinDrawPolarAurora(now); break;
     default: skinDrawClassic(now); break;
   }
   oled.display();

@@ -1,15 +1,19 @@
 {
-  "latest_version": "1.0.0",
+  "latest_version": "1.1.0",
   "min_supported_version": "1.0.0",
-  "release_date": "2026-09-12",
-  "download_url": "https://github.com/YOUR_USERNAME/YOUR_REPO/releases/download/sensor-v1.0.0/ESG_Sensor_Unit.bin",
+  "release_date": "2026-09-15",
+  "download_url": "https://github.com/Deepakkr545/echo_smart_gaurd_esp_firmware/releases/download/sensor-v1.1.0/ESG_Sensor_Unit.bin",
   "file_size_bytes": 0,
   "sha256": "",
   "mandatory": false,
   "changelog": {
     "new_features": [
-      "First version published through the in-app update checker"
+      "30 new premium OLED skins",
+      "4-mode system with device-side persistence",
+      "Test Mode, Device Connections, Other Notifications toggle"
     ],
-    "bug_fixes": []
+    "bug_fixes": [
+      "Fixed Night Mode Ended notification firing on every restart"
+    ]
   }
 }
