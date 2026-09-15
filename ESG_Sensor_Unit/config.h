@@ -25,8 +25,8 @@
 #define FIRMWARE_VERSION  "1.1.0"
 
 #define NTP_GMT_OFFSET_SEC 19800   // IST (+5:30)
-#define NIGHT_START_HOUR   22      // 10 PM
-#define NIGHT_END_HOUR     7       // 7 AM
+  // NIGHT_START_HOUR/NIGHT_END_HOUR removed — now configurable at
+  // runtime via settings.nightStartHour/nightEndHour (see storage.h).
 #define EMERGENCY_STOP_DURATION_MIN 10   // Auto-resume after this many minutes
 #define TEST_BUZZER_DURATION_MS     5000
 
@@ -40,6 +40,8 @@
 // Informational only — no automatic restart (an earlier version did
 // that and caused false-positive restart loops on static objects).
 #define SENSOR_FROZEN_THRESHOLD_SEC 30
+#define TAMPER_DISTANCE_CM 4.0f      // closer than this suggests something is physically covering/blocking the sensor
+#define TAMPER_SUSTAINED_SEC 12      // how long that close reading must hold before it's flagged (avoids false alarms from someone briefly walking right up to it)
 
 // ---------------------------------------------------------------------
 // PIN MAP

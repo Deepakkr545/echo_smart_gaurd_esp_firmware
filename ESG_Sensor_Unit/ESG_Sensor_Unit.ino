@@ -31,6 +31,8 @@ unsigned long zoneStartMillis = 0; // When continuous in-zone presence began (0 
 bool sustainedFired = false;       // Ensures the sustained alert fires only once per continuous presence
 float sustainedMin = 99999, sustainedMax = -1; // Track reading variance during the current window (informational only)
 bool frozenAlertSent = false; // Edge-trigger flag for the sensor-frozen Telegram warning (runs 24/7, independent of arm state)
+unsigned long tamperStartMillis = 0; // 0 = not currently in a close-reading streak
+bool tamperAlertSent = false; // edge-trigger flag for the tamper Telegram warning
 float lastDistanceCm = -1.0;   // Most recent sensor reading, shared with the dashboard via a pointer
 bool emergencyStopActive = false;
 unsigned long emergencyStopStartMillis = 0;
@@ -461,7 +463,7 @@ void loop() {
     time_t now = time(nullptr);
     if (now > 100000) { // time() only meaningful once NTP has synced
       int hr = localtime(&now)->tm_hour;
-      bool isNight = (hr >= NIGHT_START_HOUR || hr < NIGHT_END_HOUR);
+      bool isNight = (hr >= settings.nightStartHour || hr < settings.nightEndHour);
       if (isNight && !armed) {
         armed = true;
         armedByNightMode = true;
@@ -600,6 +602,25 @@ void loop() {
     Stats::recordSensorReading(0, false);
     Stats::recordState(armed, !settings.alarmEnabled, emergencyStopActive);
     updateDisplayScreen(armed, Alarm::isActive(), 0, false);
+  }
+
+  // --- Tamper check (armed only — a close reading while disarmed is
+  // just normal foot traffic near the sensor, not suspicious) ---
+  // Distinct from the frozen-sensor check below: frozen means the SAME
+  // reading forever (any distance); tamper means a very CLOSE reading
+  // held for a while, which is what covering the sensor with a hand,
+  // tape, or a box looks like.
+  if (armed && distanceCm > 0 && distanceCm < TAMPER_DISTANCE_CM) {
+    if (tamperStartMillis == 0) tamperStartMillis = millis();
+    if (!tamperAlertSent && (millis() - tamperStartMillis) >= (unsigned long)TAMPER_SUSTAINED_SEC * 1000UL) {
+      tamperAlertSent = true;
+      Notify::sendTextMessage("🚫 Possible Tamper Detected\n\nThe sensor has read an object closer than " +
+        String((int)TAMPER_DISTANCE_CM) + "cm for over " + String(TAMPER_SUSTAINED_SEC) +
+        " seconds. This can mean something is covering or blocking the sensor.\n\nPlease check it in person.", false, true);
+    }
+  } else {
+    tamperStartMillis = 0;
+    tamperAlertSent = false;
   }
 
   // --- Sensor-frozen health check (runs always, independent of armed/zone) ---

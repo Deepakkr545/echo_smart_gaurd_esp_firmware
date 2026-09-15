@@ -126,6 +126,21 @@ struct Settings {
   // routine notification noise without risking missing a real alert.
   bool     notifyOtherEnabled;
 
+  // --- Configurable Night Mode schedule (added v13) ---
+  // Replaces the old hardcoded NIGHT_START_HOUR/NIGHT_END_HOUR
+  // #defines. 0-23, 24-hour format. Same wraparound rule as before:
+  // if start > end, the window crosses midnight (e.g. 22 -> 7).
+  uint8_t  nightStartHour;
+  uint8_t  nightEndHour;
+
+  // --- Extra Telegram recipients (added v14) ---
+  // telegramChatId (above) is always recipient #1. These two are
+  // optional additional phones/chats — empty string means "not set".
+  // Lets a household with multiple phones all get the same alerts,
+  // not just whoever's chat ID was configured first.
+  char     telegramChatId2[16];
+  char     telegramChatId3[16];
+
   uint16_t checksum;           // Computed over all fields above.
 };
 

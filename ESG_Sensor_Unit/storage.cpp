@@ -9,7 +9,7 @@
 #include <EEPROM.h>
 
 #define STORAGE_MAGIC        "SSS1"
-#define STORAGE_VERSION      12
+#define STORAGE_VERSION      14
 #define EEPROM_SIZE          880
 #define EEPROM_START_ADDR    0
 
@@ -184,6 +184,56 @@ struct SettingsV11 {
   uint16_t checksum;
 };
 
+// Settings exactly as it existed before nightStartHour/nightEndHour
+// were added (v12) — identical to V11 plus notifyOtherEnabled.
+struct SettingsV12 {
+  char magic[4]; uint8_t version;
+  char wifiSSID[32]; char wifiPassword[64];
+  float triggerDistanceCm; float wallDistanceCm; uint32_t lastCalibrationEpoch;
+  bool alarmEnabled; uint16_t alarmDurationSec; bool autoArm; bool nightMode;
+  int8_t timezoneOffsetHours; uint32_t bootCount;
+  bool armed; bool oledOn;
+  char telegramBotToken[48]; char telegramChatId[16];
+  bool buzzerMasterEnabled; uint16_t longTermBuzzerDurationSec; uint16_t sustainedThresholdSec;
+  char buzzerDeviceIp[16]; char deviceName[32]; char deviceId[24];
+  char dashboardUsername[20]; char dashboardPassword[24];
+  char siblingDevices[220];
+  uint8_t shortTermBuzzerPattern; uint8_t longTermBuzzerPattern;
+  char buzzerIps[5][16];
+  uint32_t sessionStartEpoch; uint32_t lastAliveEpoch;
+  uint32_t historyStart[5]; uint32_t historyEnd[5]; uint8_t historyCount;
+  uint8_t displaySkin;
+  char currentMode[16];
+  bool notifyOtherEnabled;
+  uint16_t checksum;
+};
+
+// Settings exactly as it existed before telegramChatId2/3 were added
+// (v13) — identical to V12 plus nightStartHour/nightEndHour.
+struct SettingsV13 {
+  char magic[4]; uint8_t version;
+  char wifiSSID[32]; char wifiPassword[64];
+  float triggerDistanceCm; float wallDistanceCm; uint32_t lastCalibrationEpoch;
+  bool alarmEnabled; uint16_t alarmDurationSec; bool autoArm; bool nightMode;
+  int8_t timezoneOffsetHours; uint32_t bootCount;
+  bool armed; bool oledOn;
+  char telegramBotToken[48]; char telegramChatId[16];
+  bool buzzerMasterEnabled; uint16_t longTermBuzzerDurationSec; uint16_t sustainedThresholdSec;
+  char buzzerDeviceIp[16]; char deviceName[32]; char deviceId[24];
+  char dashboardUsername[20]; char dashboardPassword[24];
+  char siblingDevices[220];
+  uint8_t shortTermBuzzerPattern; uint8_t longTermBuzzerPattern;
+  char buzzerIps[5][16];
+  uint32_t sessionStartEpoch; uint32_t lastAliveEpoch;
+  uint32_t historyStart[5]; uint32_t historyEnd[5]; uint8_t historyCount;
+  uint8_t displaySkin;
+  char currentMode[16];
+  bool notifyOtherEnabled;
+  uint8_t nightStartHour;
+  uint8_t nightEndHour;
+  uint16_t checksum;
+};
+
 namespace Storage {
 
 static uint16_t computeChecksum(const uint8_t *bytes, size_t len) {
@@ -203,6 +253,8 @@ static uint16_t checksumOfV8(const SettingsV8 &s) { return computeChecksum((cons
 static uint16_t checksumOfV9(const SettingsV9 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV9, checksum)); }
 static uint16_t checksumOfV10(const SettingsV10 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV10, checksum)); }
 static uint16_t checksumOfV11(const SettingsV11 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV11, checksum)); }
+static uint16_t checksumOfV12(const SettingsV12 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV12, checksum)); }
+static uint16_t checksumOfV13(const SettingsV13 &s) { return computeChecksum((const uint8_t*)&s, offsetof(SettingsV13, checksum)); }
 
 static Settings defaults() {
   Settings s; memset(&s, 0, sizeof(Settings));
@@ -231,6 +283,8 @@ static Settings defaults() {
   s.displaySkin = 0; // Classic Numeric — matches the original always-on layout
   strncpy(s.currentMode, "home", sizeof(s.currentMode)-1); // matches the app's own first-run suggestion
   s.notifyOtherEnabled = true; // default on, everything notifies until the user turns it down
+  s.nightStartHour = 22; // matches the old hardcoded NIGHT_START_HOUR (10 PM)
+  s.nightEndHour = 7;    // matches the old hardcoded NIGHT_END_HOUR (7 AM)
   s.checksum = checksumOf(s);
   return s;
 }
@@ -247,11 +301,92 @@ Settings load() {
   bool magicOk = (memcmp(s.magic, STORAGE_MAGIC, 4) == 0);
 
   if (magicOk && s.checksum == checksumOf(s)) {
-    Serial.println("[STORAGE] Settings loaded (v12).");
+    Serial.println("[STORAGE] Settings loaded (v14).");
     return s;
   }
 
   if (magicOk) {
+    SettingsV13 v13; EEPROM.get(EEPROM_START_ADDR, v13);
+    if (v13.checksum == checksumOfV13(v13)) {
+      Serial.println("[STORAGE] Migrating v13 -> v14 (all settings preserved, no extra Telegram recipients yet).");
+      Settings m = defaults();
+      memcpy(m.wifiSSID, v13.wifiSSID, sizeof(m.wifiSSID));
+      memcpy(m.wifiPassword, v13.wifiPassword, sizeof(m.wifiPassword));
+      m.triggerDistanceCm = v13.triggerDistanceCm; m.wallDistanceCm = v13.wallDistanceCm;
+      m.lastCalibrationEpoch = v13.lastCalibrationEpoch;
+      m.alarmEnabled = v13.alarmEnabled; m.alarmDurationSec = v13.alarmDurationSec;
+      m.autoArm = v13.autoArm; m.nightMode = v13.nightMode;
+      m.timezoneOffsetHours = v13.timezoneOffsetHours; m.bootCount = v13.bootCount;
+      m.armed = v13.armed; m.oledOn = v13.oledOn;
+      memcpy(m.telegramBotToken, v13.telegramBotToken, sizeof(m.telegramBotToken));
+      memcpy(m.telegramChatId, v13.telegramChatId, sizeof(m.telegramChatId));
+      m.buzzerMasterEnabled = v13.buzzerMasterEnabled;
+      m.longTermBuzzerDurationSec = v13.longTermBuzzerDurationSec;
+      m.sustainedThresholdSec = v13.sustainedThresholdSec;
+      memcpy(m.buzzerDeviceIp, v13.buzzerDeviceIp, sizeof(m.buzzerDeviceIp));
+      memcpy(m.deviceName, v13.deviceName, sizeof(m.deviceName));
+      memcpy(m.deviceId, v13.deviceId, sizeof(m.deviceId));
+      memcpy(m.dashboardUsername, v13.dashboardUsername, sizeof(m.dashboardUsername));
+      memcpy(m.dashboardPassword, v13.dashboardPassword, sizeof(m.dashboardPassword));
+      memcpy(m.siblingDevices, v13.siblingDevices, sizeof(m.siblingDevices));
+      m.shortTermBuzzerPattern = v13.shortTermBuzzerPattern;
+      m.longTermBuzzerPattern = v13.longTermBuzzerPattern;
+      memcpy(m.buzzerIps, v13.buzzerIps, sizeof(m.buzzerIps));
+      m.sessionStartEpoch = v13.sessionStartEpoch;
+      m.lastAliveEpoch = v13.lastAliveEpoch;
+      memcpy(m.historyStart, v13.historyStart, sizeof(m.historyStart));
+      memcpy(m.historyEnd, v13.historyEnd, sizeof(m.historyEnd));
+      m.historyCount = v13.historyCount;
+      m.displaySkin = v13.displaySkin;
+      memcpy(m.currentMode, v13.currentMode, sizeof(m.currentMode));
+      m.notifyOtherEnabled = v13.notifyOtherEnabled;
+      m.nightStartHour = v13.nightStartHour;
+      m.nightEndHour = v13.nightEndHour;
+      // telegramChatId2/3 intentionally left at defaults()'s empty
+      // strings — this device never had extra recipients configured.
+      save(m);
+      return m;
+    }
+    SettingsV12 v12; EEPROM.get(EEPROM_START_ADDR, v12);
+    if (v12.checksum == checksumOfV12(v12)) {
+      Serial.println("[STORAGE] Migrating v12 -> v13 (all settings preserved, night schedule defaults to 22:00-07:00).");
+      Settings m = defaults();
+      memcpy(m.wifiSSID, v12.wifiSSID, sizeof(m.wifiSSID));
+      memcpy(m.wifiPassword, v12.wifiPassword, sizeof(m.wifiPassword));
+      m.triggerDistanceCm = v12.triggerDistanceCm; m.wallDistanceCm = v12.wallDistanceCm;
+      m.lastCalibrationEpoch = v12.lastCalibrationEpoch;
+      m.alarmEnabled = v12.alarmEnabled; m.alarmDurationSec = v12.alarmDurationSec;
+      m.autoArm = v12.autoArm; m.nightMode = v12.nightMode;
+      m.timezoneOffsetHours = v12.timezoneOffsetHours; m.bootCount = v12.bootCount;
+      m.armed = v12.armed; m.oledOn = v12.oledOn;
+      memcpy(m.telegramBotToken, v12.telegramBotToken, sizeof(m.telegramBotToken));
+      memcpy(m.telegramChatId, v12.telegramChatId, sizeof(m.telegramChatId));
+      m.buzzerMasterEnabled = v12.buzzerMasterEnabled;
+      m.longTermBuzzerDurationSec = v12.longTermBuzzerDurationSec;
+      m.sustainedThresholdSec = v12.sustainedThresholdSec;
+      memcpy(m.buzzerDeviceIp, v12.buzzerDeviceIp, sizeof(m.buzzerDeviceIp));
+      memcpy(m.deviceName, v12.deviceName, sizeof(m.deviceName));
+      memcpy(m.deviceId, v12.deviceId, sizeof(m.deviceId));
+      memcpy(m.dashboardUsername, v12.dashboardUsername, sizeof(m.dashboardUsername));
+      memcpy(m.dashboardPassword, v12.dashboardPassword, sizeof(m.dashboardPassword));
+      memcpy(m.siblingDevices, v12.siblingDevices, sizeof(m.siblingDevices));
+      m.shortTermBuzzerPattern = v12.shortTermBuzzerPattern;
+      m.longTermBuzzerPattern = v12.longTermBuzzerPattern;
+      memcpy(m.buzzerIps, v12.buzzerIps, sizeof(m.buzzerIps));
+      m.sessionStartEpoch = v12.sessionStartEpoch;
+      m.lastAliveEpoch = v12.lastAliveEpoch;
+      memcpy(m.historyStart, v12.historyStart, sizeof(m.historyStart));
+      memcpy(m.historyEnd, v12.historyEnd, sizeof(m.historyEnd));
+      m.historyCount = v12.historyCount;
+      m.displaySkin = v12.displaySkin;
+      memcpy(m.currentMode, v12.currentMode, sizeof(m.currentMode));
+      m.notifyOtherEnabled = v12.notifyOtherEnabled;
+      // nightStartHour/nightEndHour intentionally left at defaults()'s
+      // 22/7 — matches the old hardcoded schedule this device was
+      // already running under, so migrating changes nothing behaviorally.
+      save(m);
+      return m;
+    }
     SettingsV11 v11; EEPROM.get(EEPROM_START_ADDR, v11);
     if (v11.checksum == checksumOfV11(v11)) {
       Serial.println("[STORAGE] Migrating v11 -> v12 (all settings preserved, Other Notifications defaults to on).");

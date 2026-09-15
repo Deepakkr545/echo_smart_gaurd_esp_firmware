@@ -1876,6 +1876,10 @@ static void handleStatus() {
   json += "\"deviceId\":\"" + String(gSettings->deviceId) + "\",";
   json += "\"currentMode\":\"" + String(gSettings->currentMode) + "\",";
   json += "\"notifyOtherEnabled\":" + String(gSettings->notifyOtherEnabled ? "true" : "false") + ",";
+  json += "\"nightStartHour\":" + String(gSettings->nightStartHour) + ",";
+  json += "\"nightEndHour\":" + String(gSettings->nightEndHour) + ",";
+  json += "\"telegramChatId2\":\"" + String(gSettings->telegramChatId2) + "\",";
+  json += "\"telegramChatId3\":\"" + String(gSettings->telegramChatId3) + "\",";
 
   // --- Multi-buzzer arrays ---
   {
@@ -1957,6 +1961,23 @@ static void handleSetNotifyOther() { if (!checkAuth()) return;
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
 }
+// Lets the app set a custom Night Mode window (default 22:00-07:00)
+// instead of the old fixed hours, applied on every saved device at
+// once from Settings.
+static void handleSetNightSchedule() { if (!checkAuth()) return;
+  if (!httpServer.hasArg("start") || !httpServer.hasArg("end")) {
+    httpServer.send(400,"text/plain","Missing start/end"); return;
+  }
+  int startHr = httpServer.arg("start").toInt();
+  int endHr = httpServer.arg("end").toInt();
+  if (startHr < 0 || startHr > 23 || endHr < 0 || endHr > 23) {
+    httpServer.send(400,"text/plain","Hours must be 0-23"); return;
+  }
+  gSettings->nightStartHour = (uint8_t)startHr;
+  gSettings->nightEndHour = (uint8_t)endHr;
+  Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+}
 static void handleSetMode() { if (!checkAuth()) return;
   if (!httpServer.hasArg("value")) { httpServer.send(400,"text/plain","Missing value"); return; }
   String value = httpServer.arg("value");
@@ -1978,6 +1999,11 @@ extern unsigned long identifyUntilMillis;
 static void handleIdentify() { if (!checkAuth()) return;
   identifyUntilMillis = millis() + 3000;
   httpServer.send(200,"text/plain","OK");
+}
+static void handlePanic() { if (!checkAuth()) return;
+  Alarm::trigger(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+  Notify::sendTextMessage("🆘 PANIC BUTTON PRESSED\n\nManually triggered from the app. Every connected buzzer is sounding now.\n\nTime: " + Notify::currentTimeString(), true, true);
 }
 static void handleStop() { if (!checkAuth()) return; Alarm::emergencyStop(*gSettings); httpServer.send(200,"text/plain","OK"); }
 static void handleBuzzerOn() { if (!checkAuth()) return; gSettings->buzzerMasterEnabled = true; Storage::save(*gSettings); httpServer.send(200,"text/plain","OK"); }
@@ -2231,6 +2257,25 @@ static void handleRemoveTelegram() { if (!checkAuth()) return;
   Notify::sendTextMessage("🔌 Telegram Bot Disconnected\n\nThis device will no longer send Telegram notifications until reconfigured.", true);
   gSettings->telegramBotToken[0] = '\0';
   gSettings->telegramChatId[0] = '\0';
+  gSettings->telegramChatId2[0] = '\0';
+  gSettings->telegramChatId3[0] = '\0';
+  Storage::save(*gSettings);
+  httpServer.send(200,"text/plain","OK");
+}
+
+// Manages the 2 EXTRA Telegram recipients (the primary one is set via
+// /settelegram above, as part of bot setup). Either arg can be sent
+// empty to clear that slot, letting a household add or remove phones
+// without needing to redo the whole bot-token/primary-chat-id setup.
+static void handleSetExtraRecipients() { if (!checkAuth()) return;
+  String chatid2 = httpServer.hasArg("chatid2") ? httpServer.arg("chatid2") : String(gSettings->telegramChatId2);
+  String chatid3 = httpServer.hasArg("chatid3") ? httpServer.arg("chatid3") : String(gSettings->telegramChatId3);
+  if (chatid2.length() >= sizeof(gSettings->telegramChatId2) ||
+      chatid3.length() >= sizeof(gSettings->telegramChatId3)) {
+    httpServer.send(400,"text/plain","Too long"); return;
+  }
+  chatid2.toCharArray(gSettings->telegramChatId2, sizeof(gSettings->telegramChatId2));
+  chatid3.toCharArray(gSettings->telegramChatId3, sizeof(gSettings->telegramChatId3));
   Storage::save(*gSettings);
   httpServer.send(200,"text/plain","OK");
 }
@@ -2370,13 +2415,16 @@ void begin(Settings *settingsPtr, bool *armedPtr, bool *armedByNightModePtr, flo
   httpServer.on("/disarm", HTTP_POST, handleDisarm);
   httpServer.on("/setmode", HTTP_POST, handleSetMode);
   httpServer.on("/setnotifyother", HTTP_POST, handleSetNotifyOther);
+  httpServer.on("/setnightschedule", HTTP_POST, handleSetNightSchedule);
   httpServer.on("/test", HTTP_POST, handleTest);
   httpServer.on("/identify", HTTP_POST, handleIdentify);
+  httpServer.on("/panic", HTTP_POST, handlePanic);
   httpServer.on("/stop", HTTP_POST, handleStop);
   httpServer.on("/calibrate", HTTP_POST, handleCalibrate);
   httpServer.on("/setwifi", HTTP_POST, handleSetWifi);
   httpServer.on("/settelegram", HTTP_POST, handleSetTelegram);
   httpServer.on("/removetelegram", HTTP_POST, handleRemoveTelegram);
+  httpServer.on("/setextrarecipients", HTTP_POST, handleSetExtraRecipients);
   httpServer.on("/settrigger", HTTP_POST, handleSetTrigger);
   httpServer.on("/setskin", HTTP_POST, handleSetSkin);
   httpServer.on("/skins", HTTP_GET, handleSkins);

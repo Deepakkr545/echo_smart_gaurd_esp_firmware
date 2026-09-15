@@ -102,42 +102,56 @@ void sendTextMessage(const String &text, bool ignorePause, bool isSecurityAlert)
   }
 
   unsigned long start = millis();
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setBufferSizes(512, 512); // Default BearSSL buffers (~16KB) can OOM-crash the ESP8266 right after boot when other modules already hold most of the heap. 512B is plenty for Telegram's small JSON responses.
-  client.setTimeout(4000);
-  bool connected = client.connect("api.telegram.org", 443);
-  if (!connected) {
-    // Transient failures are common right after WiFi just connected
-    // (network stack/DNS not fully settled yet) — one quick retry
-    // fixes most of these. MUST call stop() first — reconnecting the
-    // same WiFiClientSecure object without it corrupts the BearSSL
-    // session state and crashes the device (this was the actual bug
-    // causing restarts on every button that sends a Telegram message).
+
+  // Sends fullText to one chat ID. Each recipient needs its own fresh
+  // TLS connection (Telegram's sendMessage API takes chat_id per
+  // request, there's no batch-send), so this repeats the whole
+  // connect/send/read sequence once per configured recipient below.
+  auto sendToOne = [&](const char *chatId) {
+    if (chatId == nullptr || chatId[0] == '\0') return; // empty slot, not configured
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setBufferSizes(512, 512); // Default BearSSL buffers (~16KB) can OOM-crash the ESP8266 right after boot when other modules already hold most of the heap. 512B is plenty for Telegram's small JSON responses.
+    client.setTimeout(4000);
+    bool connected = client.connect("api.telegram.org", 443);
+    if (!connected) {
+      // Transient failures are common right after WiFi just connected
+      // (network stack/DNS not fully settled yet) — one quick retry
+      // fixes most of these. MUST call stop() first — reconnecting the
+      // same WiFiClientSecure object without it corrupts the BearSSL
+      // session state and crashes the device (this was the actual bug
+      // causing restarts on every button that sends a Telegram message).
+      client.stop();
+      delay(600);
+      connected = client.connect("api.telegram.org", 443);
+    }
+    if (!connected) {
+      Serial.println("[NOTIFY] Connect failed (after retry).");
+      failedCount++;
+      return;
+    }
+    String msg = fullText;
+    msg.replace("\n", "%0A");
+    msg.replace(" ", "%20");
+    String url = "/bot" + String(gSettings->telegramBotToken) + "/sendMessage?chat_id=" +
+                 String(chatId) + "&text=" + msg;
+    client.print(String("GET ") + url + " HTTP/1.1\r\nHost: api.telegram.org\r\nConnection: close\r\n\r\n");
+    unsigned long t0 = millis();
+    while (client.connected() && millis() - t0 < 5000) {
+      if (client.available()) client.read();
+      yield(); // Explicitly feed the watchdog during this wait
+    }
     client.stop();
-    delay(600);
-    connected = client.connect("api.telegram.org", 443);
-  }
-  if (!connected) {
-    Serial.println("[NOTIFY] Connect failed (after retry).");
-    failedCount++;
-    return;
-  }
-  String msg = fullText;
-  msg.replace("\n", "%0A");
-  msg.replace(" ", "%20");
-  String url = "/bot" + String(gSettings->telegramBotToken) + "/sendMessage?chat_id=" +
-               String(gSettings->telegramChatId) + "&text=" + msg;
-  client.print(String("GET ") + url + " HTTP/1.1\r\nHost: api.telegram.org\r\nConnection: close\r\n\r\n");
-  unsigned long t0 = millis();
-  while (client.connected() && millis() - t0 < 5000) {
-    if (client.available()) client.read();
-    yield(); // Explicitly feed the watchdog during this wait
-  }
-  client.stop();
+    totalSent++;
+  };
+
+  sendToOne(gSettings->telegramChatId);
+  sendToOne(gSettings->telegramChatId2);
+  sendToOne(gSettings->telegramChatId3);
+
   lastResponseMs = millis() - start;
   lastSuccessMillis = millis();
-  totalSent++;
   Serial.println("[NOTIFY] Telegram message sent.");
 }
 
