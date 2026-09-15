@@ -311,7 +311,7 @@ void loadConfig() {
 #define SCREEN_HEIGHT 64
 #define OLED_ADDR     0x3C
 
-#define AP_SSID     "BuzzerSetup"
+#define AP_SSID     "ESG Buzzer Unit"
 #define AP_PASSWORD "12345678"
 #define ESTOP_DURATION_MS (5UL * 60UL * 1000UL) // 5 minutes
 #define ALIVE_SAVE_INTERVAL_MS (300000UL)        // 5 minutes
@@ -3232,6 +3232,10 @@ void handleRestart() {
 void handleFactoryReset() {
   if (!checkAuth()) return;
   server.send(200, "text/plain", "Resetting");
+  // Must send BEFORE clearing cfg — the bot token and chat IDs that
+  // make this message possible are themselves part of what's about to
+  // be wiped.
+  sendTelegramMessage("♻️ Factory Reset Initiated\n\nAll settings (WiFi, name, login) will be erased and restored to defaults. Device restarting now.");
   memset(&cfg, 0, sizeof(cfg));
   strncpy(cfg.name, "Unnamed Buzzer", sizeof(cfg.name) - 1);
   strncpy(cfg.id, "Buzzer Unit", sizeof(cfg.id) - 1);

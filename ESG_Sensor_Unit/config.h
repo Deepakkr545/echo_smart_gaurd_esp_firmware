@@ -147,7 +147,7 @@
 // Fallback Access Point — created when no saved WiFi works. This is how
 // you reach the device to configure it, per the "no physical buttons"
 // requirement: everything is done over WiFi.
-#define WIFI_AP_SSID      "Echo Smart Gaurd Setup"
+#define WIFI_AP_SSID      "ESG Sensor Unit"
 #define WIFI_AP_PASSWORD  "12345678"
 
 // How long to try connecting to saved WiFi before giving up and
